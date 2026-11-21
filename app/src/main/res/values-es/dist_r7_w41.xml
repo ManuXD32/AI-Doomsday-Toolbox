@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="sd_helper_lost_error">El ayudante %1$s (%2$s) dejó de responder y se detuvo la ejecución. Abre el registro del worker multimedia de ese dispositivo para ver el motivo.</string>
+</resources>

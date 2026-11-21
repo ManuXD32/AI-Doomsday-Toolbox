@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="branchy_r5_next_plan_stale">Settings changed since the plan was computed. Recalculate the plan to continue.</string>
+    <string name="branchy_r5_plan_recalculate">Recalculate</string>
+    <string name="branchy_r5_plan_stale_note">Settings changed since this plan was computed. Recalculate it before continuing.</string>
+    <string name="branchy_r5_epochs_title">Run length</string>
+    <string name="branchy_r5_epochs_hint">Passes over the selected data (0.1 to 100). The run stops at this many epochs or at the default token target, whichever is smaller.</string>
+    <string name="branchy_r5_epochs_label">Epochs</string>
+    <string name="branchy_r5_epochs_tokens">Data: %1$s tokens (estimated from file size where needed). Token target: %2$s.</string>
+    <string name="branchy_r5_epochs_result">%1$s steps, estimated time %2$s</string>
+    <string name="branchy_r5_eta_warning">Long run: about %1$s.</string>
+    <string name="branchy_r5_eta_suggestions">To shorten it: use fewer epochs, pick a smaller model, or add more devices.</string>
+</resources>

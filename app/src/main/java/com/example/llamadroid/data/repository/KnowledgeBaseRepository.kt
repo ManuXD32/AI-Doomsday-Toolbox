@@ -20,6 +20,7 @@ import com.example.llamadroid.service.KnowledgeBaseDiagnostics
 import com.example.llamadroid.service.DeepResearchSupport
 import com.example.llamadroid.service.LiteRtEmbeddingClient
 import com.example.llamadroid.service.ProcessController
+import com.example.llamadroid.knowledge.DocumentTextExtractor
 import com.example.llamadroid.service.extractNativePdfTextFromBytes
 import com.example.llamadroid.util.AIConstants
 import com.example.llamadroid.util.DebugLog
@@ -1234,6 +1235,18 @@ class KnowledgeBaseRepository(
                     }
                 } finally {
                     runCatching { cachedPdf.delete() }
+                }
+            } else if (DocumentTextExtractor.supports(title, context.contentResolver.getType(uri))) {
+                val cachedDoc = File.createTempFile("kb_source_", "." + title.substringAfterLast('.', "bin").take(8), knowledgeCacheDir())
+                try {
+                    context.contentResolver.openInputStream(uri)?.use { input ->
+                        cachedDoc.outputStream().use { output -> input.copyTo(output) }
+                    } ?: error("Cannot open file.")
+                    val doc = DocumentTextExtractor.extract(cachedDoc, title, context.contentResolver.getType(uri))
+                        ?: error("Unsupported document.")
+                    outputFile.writeText(doc.text, StandardCharsets.UTF_8)
+                } finally {
+                    runCatching { cachedDoc.delete() }
                 }
             } else {
                 context.contentResolver.openInputStream(uri)?.use { stream ->

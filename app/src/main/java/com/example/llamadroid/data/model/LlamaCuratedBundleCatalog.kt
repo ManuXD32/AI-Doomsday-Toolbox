@@ -14,7 +14,8 @@ object LlamaCuratedBundleCatalog {
         sha: String,
         license: String,
         note: String = "",
-        isVision: Boolean = false
+        isVision: Boolean = false,
+        shared: Boolean = false
     ) = CuratedBundleFile(
         id = id,
         repoId = repo,
@@ -26,7 +27,8 @@ object LlamaCuratedBundleCatalog {
         sizeBytes = bytes,
         sha256 = sha,
         license = license,
-        note = note
+        note = note,
+        sharedArtifactKey = if (shared) "sha256:$sha" else null
     )
 
     val bundles: List<CuratedModelBundle> = listOf(
@@ -75,6 +77,22 @@ object LlamaCuratedBundleCatalog {
         CuratedModelBundle(
             id = "qwen35-9b", titleRes = R.string.llama_bundle_qwen35_9b_title, descriptionRes = R.string.llama_bundle_qwen35_9b_desc, defaultPrefix = "Qwen3.5-9B",
             files = listOf(file("qwen35-9b-main", "lmstudio-community/Qwen3.5-9B-GGUF", "Qwen3.5-9B-Q4_K_M.gguf", "Qwen3.5-9B-Q4_K_M.gguf", ModelType.LLM, 5_627_044_256L, "cd76ec205963b3b33350093e6904d9de16c4e666fd104e1f632d25c7f15f2a13", "Apache-2.0"))
+        ),
+        CuratedModelBundle(
+            id = "qwen35-4b-3d-coder", titleRes = R.string.llama_bundle_world_coder_title, descriptionRes = R.string.llama_bundle_world_coder_desc, defaultPrefix = "Qwen3.5-4B-3D-Coder",
+            capabilityRes = listOf(R.string.curated_bundle_capability_vision),
+            files = listOf(
+                file("qwen35-4b-3d-coder-main", "ccore/Qwen3.5-4B-3D-Coder", "Qwen3.5-4B-3D-Coder-Q4_K_M.gguf", "Qwen3.5-4B-3D-Coder-Q4_K_M.gguf", ModelType.LLM, 2_708_804_096L, "32c37c83d3ca055d30aefa679f1a1670d3e2eb889ee7cc805792d53f219cfae8", "Apache-2.0", isVision = true),
+                file("qwen35-4b-3d-coder-mmproj", "ccore/Qwen3.5-4B-3D-Coder", "mmproj-Qwen3.5-4B-BF16.gguf", "mmproj-Qwen3.5-4B-BF16.gguf", ModelType.VISION_PROJECTOR, 675_568_768L, "ae08d9d7eceb8f2d0672d61b5e6aa78b611f2942b55ed71d21414980cc454b91", "Apache-2.0", shared = true)
+            )
+        ),
+        CuratedModelBundle(
+            id = "qwen35-4b-glb-3d-coder", titleRes = R.string.llama_bundle_world_coder_glb_title, descriptionRes = R.string.llama_bundle_world_coder_glb_desc, defaultPrefix = "Qwen3.5-4B-GLB-3D-Coder",
+            capabilityRes = listOf(R.string.curated_bundle_capability_vision),
+            files = listOf(
+                file("qwen35-4b-glb-3d-coder-main", "ccore/Qwen3.5-4B-GLB-3D-Coder", "Qwen3.5-4B-GLB-3D-Coder-Q4_K_M.gguf", "Qwen3.5-4B-GLB-3D-Coder-Q4_K_M.gguf", ModelType.LLM, 2_708_804_128L, "3907128f3d98bbe33a38b554766aa79be5d989793836824293f713f57f34bc22", "Apache-2.0", isVision = true),
+                file("qwen35-4b-3d-coder-mmproj", "ccore/Qwen3.5-4B-3D-Coder", "mmproj-Qwen3.5-4B-BF16.gguf", "mmproj-Qwen3.5-4B-BF16.gguf", ModelType.VISION_PROJECTOR, 675_568_768L, "ae08d9d7eceb8f2d0672d61b5e6aa78b611f2942b55ed71d21414980cc454b91", "Apache-2.0", shared = true)
+            )
         ),
         CuratedModelBundle(id = "lfm25-230m", titleRes = R.string.llama_bundle_lfm25_230m_title, descriptionRes = R.string.llama_bundle_lfm25_230m_desc, defaultPrefix = "LFM2.5-230M", files = listOf(file("lfm25-230m-main", "LiquidAI/LFM2.5-230M-GGUF", "LFM2.5-230M-Q4_K_M.gguf", "LFM2.5-230M-Q4_K_M.gguf", ModelType.LLM, 153_406_304L, "7bbd90384d3deffe4c646ec9643b212802d32d4ce417c90a1ec9282100650062", "LFM-1.0"))),
         CuratedModelBundle(id = "lfm25-350m", titleRes = R.string.llama_bundle_lfm25_350m_title, descriptionRes = R.string.llama_bundle_lfm25_350m_desc, defaultPrefix = "LFM2.5-350M", files = listOf(file("lfm25-350m-main", "LiquidAI/LFM2.5-350M-GGUF", "LFM2.5-350M-Q4_K_M.gguf", "LFM2.5-350M-Q4_K_M.gguf", ModelType.LLM, 229_312_224L, "7e6f72643caafc9a68256686638c4d7916f2cec76d1df478d4c3ddcd95a6aed4", "LFM-1.0"))),

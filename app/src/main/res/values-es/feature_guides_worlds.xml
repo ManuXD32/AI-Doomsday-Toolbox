@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="feature_guide_worlds_title">Mundos 3D</string>
+    <string name="feature_recipe_worlds_create_play_title">Crear y jugar un mundo 3D</string>
+    <string name="feature_step_worlds_create_play_orient">Los mundos 3D son escenas interactivas que el modelo del chat escribe con three.js. Elige el perfil de prompt \"Constructor de mundos 3D\" en un chat y describe la escena que quieres. Los mundos guardados aparecen en esta lista.</string>
+    <string name="feature_step_worlds_create_play_read">Cuando la respuesta termina, aparece una tarjeta de mundo 3D debajo. Toca Jugar para ejecutarlo en el chat o Pantalla completa para más espacio. Usa el joystick para moverte, arrastra para mirar y \"Ir a…\" para saltar a objetos con nombre. Toca Guardar para conservarlo en esta lista.</string>
+    <string name="feature_step_worlds_create_play_recover">Si la pantalla queda en blanco, lee el panel de errores: indica qué falló. Una respuesta cortada necesita una petición más corta o más contexto. Los mundos funcionan sin conexión, así que las texturas o modelos remotos no cargarán.</string>
+</resources>

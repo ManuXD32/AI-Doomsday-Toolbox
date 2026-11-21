@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="branchy_r7ck_requested">Punto de control solicitado — se guarda al terminar el paso actual (~%1$s)</string>
+    <string name="branchy_r7ck_requested_noeta">Punto de control solicitado — se guarda al terminar el paso actual</string>
+    <string name="branchy_r7ck_saving">Guardando punto de control…</string>
+    <string name="branchy_r7ck_saving_pct">Guardando punto de control… %1$d%%</string>
+    <string name="branchy_r7ck_saved">Punto de control guardado en el paso %1$d</string>
+    <string name="branchy_r7ck_failed_workers_lost">Punto de control no guardado: un ayudante está desconectado</string>
+    <string name="branchy_r7ck_failed_write">No se pudo enviar la solicitud de punto de control</string>
+    <string name="branchy_r7ck_failed_other">Punto de control no guardado (%1$s)</string>
+</resources>

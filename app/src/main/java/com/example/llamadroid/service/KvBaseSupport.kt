@@ -55,6 +55,16 @@ internal fun classifyBasePrepareStart(
 }
 
 /**
+ * Whether a base build may run at all: never on a single-slot server (the build would evict the
+ * chat's own state) and never when every slot is owned or last used by a chat ([chatSlots]).
+ */
+internal fun baseBuildBlockedReason(totalSlots: Int, chatSlots: Set<Int>): KvBaseFailure? = when {
+    totalSlots <= 1 -> KvBaseFailure.NO_FREE_SLOT
+    (0 until totalSlots).all { it in chatSlots } -> KvBaseFailure.NO_FREE_SLOT
+    else -> null
+}
+
+/**
  * Background rebuild decision. A base is built only when the hint carries a builder, asks for it,
  * the file is missing or invalid, no build of it is running, and the last attempt is older than
  * [cooldownMs]. A valid base is never rebuilt (so it is never overwritten).

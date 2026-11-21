@@ -183,7 +183,7 @@ fun GeneralSettingsScreen(navController: NavController) {
                         )
                         Spacer(modifier = Modifier.height(12.dp))
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            OutlinedButton(onClick = { folderPicker.launch(null) }) {
+                            OutlinedButton(onClick = { folderPicker.launchSafely(context, null) }) {
                                 Text(stringResource(R.string.action_change))
                             }
                             if (outputFolderUri != null) {
@@ -202,24 +202,14 @@ fun GeneralSettingsScreen(navController: NavController) {
                 }
             }
 
-            // Prompt disk caches (all KV caches: chats, subagents, harness agents)
+            // Chat-related preferences (prompt caches, web search, helper models) live in Chat settings.
             item {
-                ChatKvCacheStorageCard(
-                    titleRes = R.string.general_prompt_caches_title,
-                    deleteAllLabelRes = R.string.general_prompt_caches_erase_all,
-                    deleteAllTitleRes = R.string.general_prompt_caches_erase_title,
-                    deleteAllMessageRes = R.string.general_prompt_caches_erase_message
-                )
-            }
-
-            // Title generation and the vision helper live in the chats home "Helper models" sheet.
-            item {
-                Text(
-                    stringResource(R.string.general_helper_models_hint),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp)
-                )
+                OutlinedButton(
+                    onClick = { navController.navigate(com.example.llamadroid.ui.settings.chat.ChatSettingsSection.route()) },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(stringResource(R.string.general_chat_settings_link), maxLines = 2, overflow = TextOverflow.Ellipsis)
+                }
             }
 
             item {
@@ -252,7 +242,7 @@ fun GeneralSettingsScreen(navController: NavController) {
                         )
                         Spacer(modifier = Modifier.height(12.dp))
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            OutlinedButton(onClick = { quadtrixWorkspacePicker.launch(null) }) {
+                            OutlinedButton(onClick = { quadtrixWorkspacePicker.launchSafely(context, null) }) {
                                 Text(stringResource(if (quadtrixWorkspaceUri == null) R.string.quadtrix_workspace_choose else R.string.quadtrix_workspace_change))
                             }
                             if (quadtrixWorkspaceUri != null || quadtrixWorkspacePath != null) {
@@ -798,8 +788,7 @@ fun GeneralSettingsScreen(navController: NavController) {
                         if (!isIgnoringBatteryOptimizations) {
                             Button(
                                 onClick = {
-                                    val intent = Intent(android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
-                                    context.startActivity(intent)
+                                    SafeSettingsIntents.openBatterySettings(context)
                                     // Re-check after a delay (user might grant immediately)
                                     android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
                                         isIgnoringBatteryOptimizations = powerManager.isIgnoringBatteryOptimizations(packageName)
@@ -1096,7 +1085,7 @@ fun GeneralSettingsScreen(navController: NavController) {
                             Button(
                                 onClick = {
                                     walkthroughTargets?.recordEvent("settings.backups")
-                                    backupFilePicker.launch(DatabaseBackupManager.generateBackupFilename())
+                                    backupFilePicker.launchSafely(context, DatabaseBackupManager.generateBackupFilename())
                                 },
                                 modifier = Modifier.weight(1f),
                                 enabled = !isBackingUp && !isRestoring
@@ -1114,7 +1103,7 @@ fun GeneralSettingsScreen(navController: NavController) {
                             OutlinedButton(
                                 onClick = {
                                     walkthroughTargets?.recordEvent("settings.backups")
-                                    restoreFilePicker.launch(arrayOf("application/zip"))
+                                    restoreFilePicker.launchSafely(context, arrayOf("application/zip"))
                                 },
                                 modifier = Modifier.weight(1f),
                                 enabled = !isBackingUp && !isRestoring
@@ -1150,7 +1139,7 @@ fun GeneralSettingsScreen(navController: NavController) {
                             Button(
                                 onClick = {
                                     walkthroughTargets?.recordEvent("settings.backups")
-                                    nativeBackupExportPicker.launch(NativeChatNotesBackupManager.generateBackupFilename())
+                                    nativeBackupExportPicker.launchSafely(context, NativeChatNotesBackupManager.generateBackupFilename())
                                 },
                                 modifier = Modifier.weight(1f),
                                 enabled = !isNativeBackupBusy
@@ -1168,7 +1157,7 @@ fun GeneralSettingsScreen(navController: NavController) {
                             OutlinedButton(
                                 onClick = {
                                     walkthroughTargets?.recordEvent("settings.backups")
-                                    nativeBackupImportPicker.launch(
+                                    nativeBackupImportPicker.launchSafely(context, 
                                         arrayOf(
                                             "application/zip",
                                             "application/octet-stream",
@@ -1202,7 +1191,7 @@ fun GeneralSettingsScreen(navController: NavController) {
             onInstall = nativeModuleManager::requestInstall,
             onRemove = nativeModuleManager::requestRemoval,
             onImportCustom = {
-                customBinaryZipPicker.launch(
+                customBinaryZipPicker.launchSafely(context, 
                     arrayOf("application/zip", "application/x-zip-compressed", "application/octet-stream")
                 )
             },

@@ -18,6 +18,5 @@
     <string name="title_generation_status_generating">Escribiendo un título de chat…</string>
     <string name="title_generation_status_generating_chat">Escribiendo un título para \"%1$s\"…</string>
     <string name="title_generation_status_error">El último intento falló: %1$s</string>
-    <string name="title_generation_menu_item">Modelos auxiliares…</string>
     <string name="title_generation_sheet_close">Cerrar</string>
 </resources>

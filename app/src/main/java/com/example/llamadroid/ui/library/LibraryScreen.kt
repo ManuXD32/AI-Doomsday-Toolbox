@@ -31,6 +31,7 @@ import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Storage
+import androidx.compose.material.icons.filled.ViewInAr
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Card
@@ -237,6 +238,14 @@ fun LibraryContent(navController: NavController) {
                 sprite = AppSpriteKey.MODEL_AUDIO,
                 title = stringResource(R.string.soft_studio_library_open_onnx_voice),
                 onClick = { navController.navigate(Screen.OnnxTtsGallery.route) }
+            )
+            AppHubRow(
+                style = AppHubRowStyle.Plain,
+                icon = Icons.Default.ViewInAr,
+                sprite = AppSpriteKey.TOOL_IMAGE,
+                title = stringResource(R.string.worlds_ui_library_title),
+                subtitle = stringResource(R.string.worlds_ui_library_subtitle),
+                onClick = { navController.navigate(Screen.WorldLibrary.route) }
             )
             AppHubRow(
                 style = AppHubRowStyle.Plain,

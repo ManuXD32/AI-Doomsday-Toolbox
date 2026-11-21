@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="gallery_details_summary_label">Resumen</string>
+    <string name="gallery_details_summary_value">%1$s · %2$s</string>
+    <string name="gallery_details_time">Tiempo %1$s</string>
+    <string name="gallery_details_time_unknown">Tiempo desconocido</string>
+    <plurals name="gallery_details_distributed_yes">
+        <item quantity="one">Distribuido: Sí (%d ayudante)</item>
+        <item quantity="many">Distribuido: Sí (%d ayudantes)</item>
+        <item quantity="other">Distribuido: Sí (%d ayudantes)</item>
+    </plurals>
+    <string name="gallery_details_distributed_yes_plain">Distribuido: Sí</string>
+    <string name="gallery_details_distributed_no">Distribuido: No</string>
+    <string name="gallery_details_distributed_unknown">Distribuido: Desconocido</string>
+    <string name="gallery_details_compress_transfers">Transferencias de capas comprimidas</string>
+    <string name="gallery_details_lora_value">%1$s (intensidad %2$s)</string>
+</resources>

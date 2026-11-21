@@ -7,6 +7,10 @@ import com.example.llamadroid.sd.toSdLoraSpecs
 import org.json.JSONObject
 import java.io.File
 
+/** Number of RPC helper endpoints in a comma/space separated server list. */
+fun countSdRpcHelpers(rpcServers: String): Int =
+    rpcServers.split(',', ';', ' ', '\n').count { it.isNotBlank() }
+
 data class SdGeneratedImageMetadata(
     val mode: String,
     val prompt: String = "",
@@ -171,6 +175,9 @@ data class SdGeneratedImageMetadata(
         put("sdRuntimeBackendMode", sdRuntimeBackendMode)
         put("maxVramCpuGiB", maxVramCpuGiB)
         put("distributedEnabled", distributedRuntime.enabled)
+        put("distributedUsed", distributedRuntime.enabled && distributedRuntime.hasRpcServers)
+        put("rpcHelperCount", countSdRpcHelpers(distributedRuntime.rpcServers))
+        put("compressLayerTransfers", distributedRuntime.compressLayerTransfers)
         put("distributedRpcServers", distributedRuntime.rpcServers)
         put("distributedPlacementMode", distributedRuntime.placementMode.name)
         put("distributedBackendSpec", distributedRuntime.backendSpec)
@@ -484,7 +491,8 @@ data class SdGeneratedImageMetadata(
                     splitMode = runCatching {
                         SdDistributedSplitMode.valueOf(json.optString("distributedSplitMode"))
                     }.getOrDefault(SdDistributedSplitMode.LAYER),
-                    customFlags = json.optString("distributedCustomFlags")
+                    customFlags = json.optString("distributedCustomFlags"),
+                    compressLayerTransfers = json.optBoolean("compressLayerTransfers", false)
                 ),
                 customFlags = json.optString("customFlags"),
                 createdAt = json.optLong("createdAt", 0L),

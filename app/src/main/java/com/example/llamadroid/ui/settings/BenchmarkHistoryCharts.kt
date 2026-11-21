@@ -276,7 +276,7 @@ internal fun BenchmarkChartsCard(
                 OutlinedButton(
                     onClick = {
                         pendingCsv = buildBenchmarkChartCsv(selectedRuns, chartType, untitledRun)
-                        csvLauncher.launch(benchmarkExportFilename(chartType, "csv"))
+                        csvLauncher.launchSafely(context, benchmarkExportFilename(chartType, "csv"))
                     }
                 ) {
                     Icon(Icons.Default.FileDownload, contentDescription = null)
@@ -298,7 +298,7 @@ internal fun BenchmarkChartsCard(
                             ).show()
                         } else {
                             pendingPng = pngBytes
-                            pngLauncher.launch(benchmarkExportFilename(chartType, "png"))
+                            pngLauncher.launchSafely(context, benchmarkExportFilename(chartType, "png"))
                         }
                     }
                 ) {

@@ -214,9 +214,12 @@ class ProcessController {
         if (config.isEmbedding) {
             args.add("--embedding")
         } else {
-             // Chat specific params
-             args.add("--temp")
-             args.add(config.temperature.toString())
+             // Chat specific params. Auto (null) leaves --temp out so llama.cpp or the model decides.
+             formatLaunchTemperature(config.temperature)?.let { temperature ->
+                 args.add("--temp")
+                 args.add(temperature)
+             }
+             appendReasoningPreserveArgs(args, config, customFlagsArgs, binaryCapabilities)
         }
         
         if (config.kvCacheEnabled) {
@@ -558,7 +561,7 @@ class ProcessController {
             "{physical_batch_size}" to (config.physicalBatchSize ?: config.batchSize).toString(),
             "{threads_batch}" to (config.threadsBatch ?: config.threads).toString(),
             "{context_size}" to config.contextSize.toString(),
-            "{temperature}" to String.format(java.util.Locale.US, "%.2f", config.temperature),
+            "{temperature}" to (formatLaunchTemperature(config.temperature) ?: ""),
             "{host}" to config.host,
             "{port}" to config.port.toString(),
             "{flash_attention}" to if (config.flashAttention) "on" else "off",
@@ -603,10 +606,74 @@ class ProcessController {
         )
 
         var rendered = template
+        if (config.temperature == null) {
+            // Auto: drop the whole flag so `--temp {temperature}` never renders as a dangling `--temp`.
+            rendered = rendered.replace(AUTO_TEMPERATURE_TEMPLATE_FLAG, " ")
+        }
         values.forEach { (placeholder, value) ->
             rendered = rendered.replace(placeholder, value)
         }
         return rendered.trim()
+    }
+
+    /** Clean two-decimal text for `--temp` (0.6, never 0.6000001); null (Auto) or negative yields null. */
+    internal fun formatLaunchTemperature(temperature: Float?): String? {
+        if (temperature == null || temperature < 0f) return null
+        return (Math.round(temperature * 100f) / 100f).toString()
+    }
+
+    /**
+     * Emits `--reasoning-preserve` / `--no-reasoning-preserve` and the patched `--chat-template-file`
+     * for chat servers. Each flag needs help-text proof from the binary and yields to the user's own
+     * custom flags, so an unsupported or overridden flag is never sent.
+     */
+    private fun appendReasoningPreserveArgs(
+        args: MutableList<String>,
+        config: LlamaConfig,
+        customFlagsArgs: List<String>,
+        capabilities: LlamaBinaryCapabilities?
+    ) {
+        fun hasCustom(vararg names: String) = customFlagsArgs.any { arg ->
+            names.any { name -> arg == name || arg.startsWith("$name=") }
+        }
+        appendReasoningModeArgs(args, config, customFlagsArgs, capabilities)
+        val preserve = config.reasoningPreserve ?: return
+        val flag = if (preserve) "--reasoning-preserve" else "--no-reasoning-preserve"
+        if (capabilities?.supports(flag) == true &&
+            !hasCustom("--reasoning-preserve", "--no-reasoning-preserve")
+        ) {
+            args.add(flag)
+        }
+        val templateFile = config.chatTemplateFile?.takeIf { it.isNotBlank() && preserve }
+        if (templateFile != null &&
+            capabilities?.supports("--chat-template-file") == true &&
+            !hasCustom("--chat-template", "--chat-template-file")
+        ) {
+            args.add("--chat-template-file")
+            args.add(templateFile)
+        }
+    }
+
+    /** Emits `--reasoning on|off` and `--reasoning-effort` only when non-default, supported and not overridden. */
+    private fun appendReasoningModeArgs(
+        args: MutableList<String>,
+        config: LlamaConfig,
+        customFlagsArgs: List<String>,
+        capabilities: LlamaBinaryCapabilities?
+    ) {
+        fun hasCustom(name: String) = customFlagsArgs.any { it == name || it.startsWith("$name=") }
+        LlamaReasoning.serverModeFlag(config.reasoningMode)?.let { value ->
+            if (capabilities?.supports("--reasoning") == true && !hasCustom("--reasoning")) {
+                args.add("--reasoning")
+                args.add(value)
+            }
+        }
+        LlamaReasoning.serverEffortFlag(config.reasoningEffort)?.let { value ->
+            if (capabilities?.supports("--reasoning-effort") == true && !hasCustom("--reasoning-effort")) {
+                args.add("--reasoning-effort")
+                args.add(value)
+            }
+        }
     }
 
     private fun appendLoraArgsIfNeeded(
@@ -938,6 +1005,8 @@ class ProcessController {
     }
 
     private companion object {
+        private val AUTO_TEMPERATURE_TEMPLATE_FLAG =
+            Regex("""(?<=\s|^)(--temp|--temperature|-temp)(\s+|=)\{temperature\}""")
         private const val DEFAULT_BINARY_SCAN_BUFFER_SIZE = 8192
         private const val RECENT_OUTPUT_LIMIT = 24
         private const val HTTP_READINESS_TIMEOUT_MS = 5_000L

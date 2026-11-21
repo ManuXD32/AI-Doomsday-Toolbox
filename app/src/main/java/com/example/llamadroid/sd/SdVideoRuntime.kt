@@ -101,6 +101,11 @@ enum class SdVideoDecoderCompatibility {
     NATIVE_VAE_ONLY,
     TAEHV_WAN21,
     TAEHV_WAN22,
+    /** HunyuanVideo: TAEHV with 32 latent channels (tae.hpp:551-553). */
+    TAEHV_HUNYUAN,
+    /** MiniMax-H3: TAEHV with 24 latent channels (tae.hpp:559-562). */
+    TAEHV_MINIMAX_H3,
+    /** LTX: conv video VAE for `--vae`; the optional TAEHV uses 128 latent channels (tae.hpp:554-558). */
     LTX_CONV_VIDEO_VAE
 }
 
@@ -396,7 +401,8 @@ object SdVideoFamilyProfiles {
         family = SdVideoFamily.HUNYUAN_VIDEO,
         displayName = "HunyuanVideo",
         textConditioning = SdVideoTextConditioning.BOTH,
-        decoderKind = SdVideoDecoderKind.VAE,
+        decoderKind = SdVideoDecoderKind.VAE_OR_TAE,
+        decoderCompatibility = SdVideoDecoderCompatibility.TAEHV_HUNYUAN,
         supportedWorkflows = setOf(SdVideoWorkflow.TEXT_TO_VIDEO),
         requiredComponentGroups = listOf(
             setOf(SdVideoComponentRole.DIFFUSION_MODEL),
@@ -433,7 +439,7 @@ object SdVideoFamilyProfiles {
         family = SdVideoFamily.LTX_VIDEO,
         displayName = "LTX Video",
         textConditioning = SdVideoTextConditioning.LLM,
-        decoderKind = SdVideoDecoderKind.VAE,
+        decoderKind = SdVideoDecoderKind.VAE_OR_TAE,
         decoderCompatibility = SdVideoDecoderCompatibility.LTX_CONV_VIDEO_VAE,
         supportedWorkflows = setOf(
             SdVideoWorkflow.TEXT_TO_VIDEO,
@@ -461,7 +467,8 @@ object SdVideoFamilyProfiles {
         family = SdVideoFamily.MINIMAX_H3,
         displayName = "MiniMax-H3",
         textConditioning = SdVideoTextConditioning.LLM,
-        decoderKind = SdVideoDecoderKind.VAE,
+        decoderKind = SdVideoDecoderKind.VAE_OR_TAE,
+        decoderCompatibility = SdVideoDecoderCompatibility.TAEHV_MINIMAX_H3,
         supportedWorkflows = setOf(
             SdVideoWorkflow.TEXT_TO_AUDIO_VIDEO,
             SdVideoWorkflow.IMAGE_TO_AUDIO_VIDEO,
@@ -545,6 +552,9 @@ object SdVideoFamilyProfiles {
         val base = all.first { it.family == family }
         return when {
             variant.isNullOrBlank() || base.variant.equals(variant, ignoreCase = true) -> base
+            family == SdVideoFamily.LTX_VIDEO && variant.trim().startsWith("0.9") ->
+                // LTXAVModelBlock always builds audio_patchify_proj (ltxv.hpp:1356); 0.9.x has none.
+                base.copy(variant = variant, nativeWorkflowSupported = false)
             family == SdVideoFamily.LTX_VIDEO && variant.contains("2.5", ignoreCase = true) -> {
                 base.copy(
                     variant = variant,

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="dist_perf_rpc_debug">Registro de depuración RPC</string>
+    <string name="dist_perf_rpc_debug_desc">Registra cada llamada RPC. Ralentiza la generación; déjalo apagado salvo para diagnosticar un trabajador. Se aplica al iniciar de nuevo el trabajador.</string>
+    <string name="dist_perf_ubatch">Tamaño de lote físico (ubatch)</string>
+    <string name="dist_perf_rtt_ms">RTT %1$s ms</string>
+    <string name="dist_perf_rtt_unknown">RTT desconocido</string>
+    <string name="dist_perf_advert_ram_cores">%1$s MiB libres, %2$s núcleos</string>
+    <string name="dist_perf_advert_ram">%1$s MiB libres</string>
+    <string name="dist_perf_warn_tiny_share">%1$s solo tendría %2$s de las capas. Su salto de red probablemente cuesta más de lo que aporta; considera quitarlo.</string>
+    <string name="dist_perf_warn_fits_master">El modelo cabe en el presupuesto de RAM de este teléfono. No se usan trabajadores, porque cada trabajador añade un viaje de red por token.</string>
+    <string name="dist_perf_warn_network_bound">El tiempo de red por token (unos %1$s ms) es grande frente al cómputo estimado (unos %2$s ms). Espera una generación lenta; usa un enlace más rápido o menos trabajadores.</string>
+    <string name="dist_perf_warn_insufficient_ram">Los dispositivos seleccionados no tienen RAM suficiente para este modelo. Las capas se repartieron en proporción a la RAM y la carga puede fallar.</string>
+</resources>

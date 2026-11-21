@@ -84,6 +84,10 @@ fun ChatsHomeScreen(navController: NavController) {
                                 text = { Text(stringResource(R.string.ui_chats_scheduled_prompts), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                                 onClick = { showOverflow = false; navController.navigate(Screen.LlamaScheduler.route) }
                             )
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.chat_global_settings_title), maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                                onClick = { showOverflow = false; navController.navigate(com.example.llamadroid.ui.settings.chat.ChatSettingsSection.route()) }
+                            )
                         }
                     }
                 }

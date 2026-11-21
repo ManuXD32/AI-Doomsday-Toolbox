@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="branchy_r7_helper_bench">Rendimiento</string>
+    <string name="branchy_r7_helper_benching">Midiendo…</string>
+    <plurals name="branchy_r7_helper_best">
+        <item quantity="one">Mejor: %1$d hilo · %2$s GFLOP/s</item>
+        <item quantity="many">Mejor: %1$d de hilos · %2$s GFLOP/s</item>
+        <item quantity="other">Mejor: %1$d hilos · %2$s GFLOP/s</item>
+    </plurals>
+</resources>

@@ -1,5 +1,6 @@
 package com.example.llamadroid.ui.easy
 
+import com.example.llamadroid.ui.settings.launchSafely
 import android.content.Context
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -387,13 +388,13 @@ internal fun EasyModelImportSection(
             }
         }
         when {
-            kind == EasyModelKind.CHAT -> importButton(R.string.easy_import_chat_button) { chatPicker.launch(anyFile) }
-            kind == EasyModelKind.VOICE -> importButton(R.string.easy_import_voice_button) { voicePicker.launch(anyFile) }
+            kind == EasyModelKind.CHAT -> importButton(R.string.easy_import_chat_button) { chatPicker.launchSafely(context, anyFile) }
+            kind == EasyModelKind.VOICE -> importButton(R.string.easy_import_voice_button) { voicePicker.launchSafely(context, anyFile) }
             engine == EasyImageEngine.ONNX -> {
-                importButton(R.string.easy_import_onnx_folder_button) { onnxFolderPicker.launch(null) }
-                importButton(R.string.easy_import_onnx_zip_button) { onnxZipPicker.launch(anyFile) }
+                importButton(R.string.easy_import_onnx_folder_button) { onnxFolderPicker.launchSafely(context, null) }
+                importButton(R.string.easy_import_onnx_zip_button) { onnxZipPicker.launchSafely(context, anyFile) }
             }
-            else -> importButton(R.string.easy_import_sd_button) { sdPicker.launch(anyFile) }
+            else -> importButton(R.string.easy_import_sd_button) { sdPicker.launchSafely(context, anyFile) }
         }
 
         if (busy) {
@@ -434,7 +435,7 @@ internal fun EasyModelImportSection(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedButton(onClick = { projectorPicker.launch(anyFile) }) {
+                        OutlinedButton(onClick = { projectorPicker.launchSafely(context, anyFile) }) {
                             Text(stringResource(R.string.easy_import_projector_button), maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
                         TextButton(onClick = { pendingLlm = null }) {

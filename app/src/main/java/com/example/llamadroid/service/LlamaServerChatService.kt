@@ -54,7 +54,11 @@ data class LlamaServerRequestOptions(
      */
     val streamReadTimeoutMs: Int = 1_800_000,
     /** Sends an assistant message's `thinking` back as `reasoning_content` (native chat tool turns only). */
-    val sendReasoningContent: Boolean = false
+    val sendReasoningContent: Boolean = false,
+    /** Thinking = "Template default": omit `chat_template_kwargs.enable_thinking` and let the template decide. */
+    val omitThinkingKwarg: Boolean = false,
+    /** Per-request `reasoning_effort` (minimal..max); null keeps the server/template default. */
+    val reasoningEffort: String? = null
 )
 
 data class LlamaPromptProcessingProgress(
@@ -1046,9 +1050,11 @@ internal fun buildLlamaServerChatRequestPayload(
                 }
             }
         },
-        "chat_template_kwargs" to linkedMapOf("enable_thinking" to thinkingEnabled),
         "cache_prompt" to requestOptions.cachePrompt
     )
+    if (!requestOptions.omitThinkingKwarg) {
+        payload["chat_template_kwargs"] = linkedMapOf("enable_thinking" to thinkingEnabled)
+    }
 
     requestOptions.slotId?.takeIf { it >= 0 }?.let { payload["id_slot"] = it }
 
@@ -1113,6 +1119,8 @@ internal fun buildLlamaServerChatRequestPayload(
     if (!thinkingEnabled) {
         payload["reasoning_effort"] = "none"
         payload["reasoning"] = mapOf("effort" to "none")
+    } else {
+        LlamaReasoning.requestEffort(requestOptions.reasoningEffort)?.let { payload["reasoning_effort"] = it }
     }
 
     return payload

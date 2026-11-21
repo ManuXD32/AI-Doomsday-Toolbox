@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Main-device screen shell and step 3 (Run) -->
+    <string name="sd_r8_w08_step_model">Model</string>
+    <string name="sd_r8_w08_step_devices">Devices</string>
+    <string name="sd_r8_w08_step_run">Run</string>
+    <string name="sd_r8_w08_step_done_cd">%1$s, done</string>
+    <string name="sd_r8_w08_next">Next</string>
+    <string name="sd_r8_w08_loading">Loading your setup</string>
+    <string name="sd_r8_w08_input_title">Input image</string>
+    <string name="sd_r8_w08_prompt_title">Prompt</string>
+    <string name="sd_r8_w08_size_title">Size and quality</string>
+    <string name="sd_r8_w08_adv_sampling">Sampling</string>
+    <string name="sd_r8_w08_adv_runtime">Memory and speed</string>
+    <string name="sd_r8_w08_adv_cache">Cache</string>
+    <string name="sd_r8_w08_links_title">Results and network</string>
+    <plurals name="sd_r8_w08_silence_hint">
+        <item quantity="one">No output from the generator for %d minute. It may still be loading or transferring models. Stop the run if it stays silent.</item>
+        <item quantity="other">No output from the generator for %d minutes. It may still be loading or transferring models. Stop the run if it stays silent.</item>
+    </plurals>
+</resources>

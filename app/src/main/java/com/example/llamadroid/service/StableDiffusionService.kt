@@ -37,6 +37,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -903,6 +904,7 @@ class StableDiffusionService : Service() {
         val libDir = File(applicationContext.filesDir, "lib").apply { mkdirs() }
         setupSdLibrarySymlinks(sdBinary.parentFile, libDir, sdBinary.absolutePath)
         pb.environment()["LD_LIBRARY_PATH"] = sdProcessLibraryPath(binaryRepo, sdBinary, libDir)
+        pb.environment().putAll(sdRpcClientEnvironment(config.distributedRuntime))
 
         val process = pb.start()
         storeModeProcess(config.mode, useDistributedStateHolder, process)
@@ -933,11 +935,14 @@ class StableDiffusionService : Service() {
             }
         }
 
+        val lastOutputAtMs = java.util.concurrent.atomic.AtomicLong(System.currentTimeMillis())
+        val watchdog = SdHelperWatchdog.startFor(this@StableDiffusionService, config.distributedRuntime, useDistributedStateHolder, process) { lastOutputAtMs.get() }
         try {
             process.inputStream.bufferedReader().use { reader ->
                 var line = reader.readLine()
                 while (line != null) {
                     nativeOutput.add(line)
+                    lastOutputAtMs.set(System.currentTimeMillis())
                     markNativeOutput(config.mode)
                     DebugLog.log("SD: $line")
                     latestStageTimings = latestStageTimings.withLine(line)
@@ -959,9 +964,17 @@ class StableDiffusionService : Service() {
                     line = reader.readLine()
                 }
             }
+        } catch (e: java.io.IOException) {
+            // cancelMode() closes the pipes while this coroutine reads them: that is a cancel, not a failure.
+            if (watchdog?.lost != true) {
+                ensureActive()
+                throw e
+            }
         } finally {
             etaTickerJob.cancel()
+            watchdog?.stop()
         }
+        watchdog?.lostMessage(this@StableDiffusionService)?.let { throw IllegalStateException(it) }
 
         val exitCode = process.waitFor()
         DebugLog.log("[StableDiffusionService] Process exited with code $exitCode")
@@ -1127,6 +1140,7 @@ class StableDiffusionService : Service() {
         val libDir = File(applicationContext.filesDir, "lib").apply { mkdirs() }
         setupSdLibrarySymlinks(sdBinary.parentFile, libDir, sdBinary.absolutePath)
         pb.environment()["LD_LIBRARY_PATH"] = sdProcessLibraryPath(binaryRepo, sdBinary, libDir)
+        pb.environment().putAll(sdRpcClientEnvironment(config.distributedRuntime))
 
         val process = pb.start()
         storeModeProcess(SDMode.UPSCALE, useDistributedStateHolder, process)
@@ -1154,11 +1168,14 @@ class StableDiffusionService : Service() {
             }
         }
 
+        val lastOutputAtMs = java.util.concurrent.atomic.AtomicLong(System.currentTimeMillis())
+        val watchdog = SdHelperWatchdog.startFor(this@StableDiffusionService, config.distributedRuntime, useDistributedStateHolder, process) { lastOutputAtMs.get() }
         try {
             process.inputStream.bufferedReader().use { reader ->
                 var line = reader.readLine()
                 while (line != null) {
                     nativeOutput.add(line)
+                    lastOutputAtMs.set(System.currentTimeMillis())
                     markNativeOutput(SDMode.UPSCALE)
                     DebugLog.log("SD: $line")
                     progressTracker.update(line, SystemClock.elapsedRealtime())?.let { parsedSnapshot ->
@@ -1179,9 +1196,17 @@ class StableDiffusionService : Service() {
                     line = reader.readLine()
                 }
             }
+        } catch (e: java.io.IOException) {
+            // cancelMode() closes the pipes while this coroutine reads them: that is a cancel, not a failure.
+            if (watchdog?.lost != true) {
+                ensureActive()
+                throw e
+            }
         } finally {
             etaTickerJob.cancel()
+            watchdog?.stop()
         }
+        watchdog?.lostMessage(this@StableDiffusionService)?.let { throw IllegalStateException(it) }
 
         val exitCode = process.waitFor()
         DebugLog.log("[StableDiffusionService] Upscale process exited with code $exitCode")

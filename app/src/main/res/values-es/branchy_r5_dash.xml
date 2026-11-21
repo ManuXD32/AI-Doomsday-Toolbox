@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="branchy_r5d_status_unreachable">Inalcanzable</string>
+    <string name="branchy_r5d_status_offline">Sin conexión</string>
+    <string name="branchy_r5d_micro_title">Microlote %1$s/%2$s</string>
+    <string name="branchy_r5d_micro_stats">%1$s tok/s · RAM %2$s</string>
+    <string name="branchy_r5d_devices_title">Dispositivos</string>
+    <string name="branchy_r5d_dev_rtt">RTT %1$s ms</string>
+    <string name="branchy_r5d_dev_speed">%1$s tok/s</string>
+    <string name="branchy_r5d_dev_ram">RAM %1$s</string>
+    <string name="branchy_r5d_dev_steps">Pasos %1$s</string>
+    <string name="branchy_r5d_dev_sync_ago">Última sincronización hace %1$s</string>
+    <string name="branchy_r5d_dev_sync_never">Sin sincronizar aún</string>
+    <string name="branchy_r5d_waiting_title">Esperando a %1$s</string>
+    <string name="branchy_r5d_waiting_join">Los ayudantes aún no han respondido.</string>
+    <string name="branchy_r5d_waiting_run">Un ayudante dejó de responder; reintentando.</string>
+    <string name="branchy_r5d_skip_button">Continuar sin %1$s</string>
+    <string name="branchy_r5d_skip_confirm_title">¿Continuar sin %1$s?</string>
+    <string name="branchy_r5d_skip_confirm_body">El entrenamiento seguirá sin este dispositivo y no intentará reconectarlo.</string>
+    <string name="branchy_r5d_not_skippable">Pausa el entrenamiento y usa Editar dispositivos para quitar o reemplazar el dispositivo que falta.</string>
+    <string name="branchy_r5d_edit_devices">Editar dispositivos</string>
+    <string name="branchy_r5d_runlog_title">Registro de ejecución</string>
+    <string name="branchy_r5d_runlog_show">Mostrar</string>
+    <string name="branchy_r5d_runlog_hide">Ocultar</string>
+    <string name="branchy_r5d_runlog_empty">Aún no hay registro.</string>
+    <string name="branchy_r5d_runlog_loading">Cargando…</string>
+    <string name="branchy_r5d_runlog_refresh">Actualizar</string>
+    <string name="branchy_r5d_copied">Copiado</string>
+</resources>

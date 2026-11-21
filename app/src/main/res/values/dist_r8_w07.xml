@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Main-device screen, step 1 (Model) -->
+    <string name="sd_r8_w07_workflow_title">What do you want to make?</string>
+    <string name="sd_r8_w07_workflow_generate">Generate an image</string>
+    <string name="sd_r8_w07_workflow_img2img">Image to image</string>
+    <string name="sd_r8_w07_workflow_upscale">Upscale an image</string>
+    <string name="sd_r8_w07_image_title">Image model</string>
+    <string name="sd_r8_w07_upscaler_title">Upscaler model</string>
+    <string name="sd_r8_w07_empty_images">No image model is installed yet. Download one to start generating images.</string>
+    <string name="sd_r8_w07_empty_upscalers">No upscaler model is installed yet. Download one to enlarge images.</string>
+    <string name="sd_r8_w07_get_models">Get models</string>
+    <string name="sd_r8_w07_state_ready">Ready</string>
+    <string name="sd_r8_w07_state_selected">Selected</string>
+    <string name="sd_r8_w07_state_not_installed">Not installed</string>
+    <plurals name="sd_r8_w07_files_missing">
+        <item quantity="one">%d file missing</item>
+        <item quantity="other">%d files missing</item>
+    </plurals>
+    <string name="sd_r8_w07_component_line">%1$s: %2$s</string>
+    <string name="sd_r8_w07_missing_line">Missing: %1$s</string>
+    <string name="sd_r8_w07_files_title">Model files</string>
+    <string name="sd_r8_w07_video_options_title">Video options</string>
+
+    <!-- Step 2 (Devices) -->
+    <string name="sd_r8_w07_split_title">How the work is split</string>
+    <string name="sd_r8_w07_split_local_only">Runs on this phone only</string>
+    <string name="sd_r8_w07_split_budget">Memory shared: %1$s</string>
+    <string name="sd_r8_w07_split_part">%1$s on %2$s</string>
+    <string name="sd_r8_w07_ram_gb">%1$.1f GB</string>
+    <string name="sd_r8_w07_this_phone">this phone</string>
+    <plurals name="sd_r8_w07_helpers_on">
+        <item quantity="one">%d Helper turned on</item>
+        <item quantity="other">%d Helpers turned on</item>
+    </plurals>
+    <string name="sd_r8_w07_nearby_title">Helpers nearby</string>
+    <string name="sd_r8_w07_helpers_title">Your Helpers</string>
+    <string name="sd_r8_w07_helpers_desc">A Helper is another device that lends its memory and power. Tick one to use it.</string>
+    <string name="sd_r8_w07_helper_online">Online</string>
+    <string name="sd_r8_w07_helper_offline">Not reachable</string>
+    <string name="sd_r8_w07_add_manually">Add a Helper manually</string>
+    <string name="sd_r8_w07_edit_helper">Edit Helper</string>
+    <string name="sd_r8_w07_remove_helper">Remove Helper</string>
+    <string name="sd_r8_w07_form_host">Helper address (host or IP)</string>
+    <string name="sd_r8_w07_form_port">Port</string>
+    <string name="sd_r8_w07_form_name">Name</string>
+    <string name="sd_r8_w07_form_ram">RAM (MB)</string>
+    <string name="sd_r8_w07_form_threads">Threads</string>
+    <string name="sd_r8_w07_form_add">Add Helper</string>
+    <string name="sd_r8_w07_form_save">Save Helper</string>
+    <string name="sd_r8_w07_form_cancel">Cancel</string>
+    <string name="sd_r8_w07_guide_link">How to set up a Helper</string>
+    <string name="sd_r8_w07_this_phone_title">Use this phone too</string>
+    <string name="sd_r8_w07_this_phone_desc">This phone also holds part of the model, together with your Helpers.</string>
+    <string name="sd_r8_w07_phone_name">Name shown for this phone</string>
+    <string name="sd_r8_w07_advanced_title">Advanced placement</string>
+    <string name="sd_r8_w07_this_phone_details">This phone</string>
+    <string name="sd_r8_w07_auto_ram_help">The app gives each Helper a memory budget based on the RAM it shares, then lets the generator fit the model into those budgets.</string>
+    <string name="sd_r8_w07_auto_fit_help">Auto-fit lets the generator place the model by itself. Turn on the custom memory budget below only if you want to set your own limits.</string>
+    <string name="sd_r8_w07_manual_help">Manual mode keeps your Helper list but ignores the placement fields. Put raw placement flags in the custom flags of the last step.</string>
+    <string name="sd_r8_w07_max_vram_title">Custom memory budget</string>
+    <string name="sd_r8_w07_max_vram_desc">Only for compatible accelerators. Phones normally use the RAM each Helper shares instead.</string>
+    <string name="sd_r8_w07_max_vram_warning">Explicit layer splits such as diffusion=RPC0&amp;RPC1 cannot use a memory budget for that module. Auto RAM sets a budget per Helper; Components keeps your explicit backend map.</string>
+</resources>

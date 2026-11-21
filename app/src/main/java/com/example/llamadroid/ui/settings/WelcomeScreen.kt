@@ -6,7 +6,6 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.os.PowerManager
-import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -67,10 +66,16 @@ fun WelcomeScreen(
         contract = ActivityResultContracts.OpenDocumentTree()
     ) { uri ->
         uri?.let {
-            context.contentResolver.takePersistableUriPermission(
-                it, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
-            )
-            settingsRepo.setOutputFolderUri(it.toString())
+            val persisted = runCatching {
+                context.contentResolver.takePersistableUriPermission(
+                    it, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                )
+            }.isSuccess
+            if (persisted) {
+                settingsRepo.setOutputFolderUri(it.toString())
+            } else {
+                SafeSettingsIntents.showToast(context, R.string.startup_folder_permission_failed)
+            }
         }
     }
 
@@ -122,8 +127,7 @@ fun WelcomeScreen(
                     1 -> BatteryStep(
                         isOptimized = isIgnoringBattery,
                         onRequestPermission = {
-                            val intent = Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
-                            context.startActivity(intent)
+                            SafeSettingsIntents.openBatterySettings(context)
                             // Re-check after delay
                             android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
                                 isIgnoringBattery = powerManager.isIgnoringBatteryOptimizations(context.packageName)
@@ -137,7 +141,11 @@ fun WelcomeScreen(
                                     ?: resources.getString(R.string.welcome_status_selected)
                             } catch (e: Exception) { resources.getString(R.string.welcome_status_selected) }
                         },
-                        onSelectFolder = { folderPicker.launch(null) }
+                        onSelectFolder = {
+                            runCatching { folderPicker.launch(null) }.onFailure {
+                                SafeSettingsIntents.showToast(context, R.string.startup_folder_picker_unavailable)
+                            }
+                        }
                     )
                     3 -> PhantomProcessStep(
                         onCopyCommands = { commands ->

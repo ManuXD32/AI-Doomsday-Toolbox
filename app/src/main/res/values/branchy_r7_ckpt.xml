@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="branchy_r7ck_requested">Checkpoint requested — saved when the current step ends (~%1$s)</string>
+    <string name="branchy_r7ck_requested_noeta">Checkpoint requested — saved when the current step ends</string>
+    <string name="branchy_r7ck_saving">Saving checkpoint…</string>
+    <string name="branchy_r7ck_saving_pct">Saving checkpoint… %1$d%%</string>
+    <string name="branchy_r7ck_saved">Checkpoint saved at step %1$d</string>
+    <string name="branchy_r7ck_failed_workers_lost">Checkpoint not saved: a helper is offline</string>
+    <string name="branchy_r7ck_failed_write">Checkpoint request could not be sent</string>
+    <string name="branchy_r7ck_failed_other">Checkpoint not saved (%1$s)</string>
+</resources>

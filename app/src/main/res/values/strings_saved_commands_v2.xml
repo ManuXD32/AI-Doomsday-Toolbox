@@ -4,4 +4,5 @@
     <string name="saved_command_overwrite_message">A command named "%1$s" already exists. Replace it with the current settings?</string>
     <string name="saved_command_overwrite">Overwrite</string>
     <string name="saved_command_overwritten">Saved command updated</string>
+    <string name="saved_command_in_use_by_server">This saved command is used by a server. Delete the server first.</string>
 </resources>

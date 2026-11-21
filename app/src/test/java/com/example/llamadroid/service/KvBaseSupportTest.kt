@@ -64,4 +64,13 @@ class KvBaseSupportTest {
         assertNull(KvBaseHint(key).builder)
         assertTrue(shouldCaptureBase(capture = true, baseFileValid = false, ownStatePresent = false))
     }
+
+    @Test
+    fun `base build is skipped on one slot or when every slot belongs to a chat`() {
+        assertEquals(KvBaseFailure.NO_FREE_SLOT, baseBuildBlockedReason(1, emptySet()))
+        assertEquals(KvBaseFailure.NO_FREE_SLOT, baseBuildBlockedReason(0, emptySet()))
+        assertEquals(KvBaseFailure.NO_FREE_SLOT, baseBuildBlockedReason(2, setOf(0, 1)))
+        assertNull(baseBuildBlockedReason(2, setOf(0)))
+        assertNull(baseBuildBlockedReason(4, emptySet()))
+    }
 }

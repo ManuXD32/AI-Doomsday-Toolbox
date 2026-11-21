@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="dist_r4_transfer_receiving">Recibiendo capas · %1$s / %2$s MB · %3$s MB/s · quedan %4$s</string>
+    <string name="dist_r4_transfer_receiving_plain">Recibiendo capas · %1$s / %2$s MB</string>
+    <string name="dist_r4_transfer_waiting">Esperando sus capas · %1$s MB</string>
+    <string name="dist_r4_transfer_done">Capas recibidas · %1$s MB</string>
+    <string name="dist_r4_transfer_cache">Cargado desde la caché del ayudante</string>
+</resources>

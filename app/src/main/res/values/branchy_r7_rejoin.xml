@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="branchy_r7_rejoin_trying">Trying to reconnect…</string>
+    <string name="branchy_r7_rejoin_failed">Still unreachable: %1$s — next try in %2$s</string>
+    <string name="branchy_r7_rejoin_failed_no_retry">Still unreachable: %1$s</string>
+    <string name="branchy_r7_rejoin_failed_noreason">Still unreachable — next try in %1$s</string>
+    <string name="branchy_r7_rejoin_failed_bare">Still unreachable</string>
+    <string name="branchy_r7_rejoin_joined">Reconnected</string>
+</resources>

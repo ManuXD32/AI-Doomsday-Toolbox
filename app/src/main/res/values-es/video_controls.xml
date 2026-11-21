@@ -1,6 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="video_controls_profile_title">Perfil de video</string>
     <string name="video_controls_binary_checking">Comprobando el binario nativo seleccionado; los controles guardados siguen editables hasta conocer el resultado.</string>
     <string name="video_controls_binary_unavailable">Controles seleccionados no disponibles: %1$d. Se conservan los valores guardados para recuperarlos.</string>
     <string name="video_controls_binary_unavailable_selection">El binario de vídeo de Stable Diffusion seleccionado no está disponible o no se pudo comprobar. Elige un binario multimedia en Ajustes y vuelve a comprobarlo.</string>
@@ -50,17 +49,14 @@
     <string name="video_controls_lora_low_noise_unavailable">Los adaptadores solo para bajo ruido no están disponibles en este contrato nativo.</string>
     <string name="video_controls_lora_missing_or_incompatible">Este adaptador falta o no es compatible con la familia de video seleccionada: %1$s. Desactívalo o elige un modelo compatible.</string>
     <string name="video_controls_lora_default">Predeterminado nativo</string>
-    <string name="video_controls_lingbot_apply">Aplicar el perfil LingBot Phone instalado</string>
-    <string name="video_controls_lingbot_ready">Los componentes de LingBot Phone están instalados.</string>
-    <string name="video_controls_lingbot_missing">Instala todos los componentes de LingBot Phone en Modelos SD antes de aplicar este perfil.</string>
-    <string name="video_controls_lingbot_no_run">Solo aplica el perfil guardado; no descarga ni inicia una ejecución.</string>
     <string name="video_controls_profile_missing_components">Faltan en el perfil seleccionado: %1$s</string>
     <string name="video_controls_profile_missing_inputs">Faltan en el flujo seleccionado: %1$s</string>
     <string name="video_controls_custom_path_hint">Introduce una ruta local o selecciona un modelo instalado</string>
     <string name="video_controls_clear">Borrar</string>
     <string name="video_controls_additional_options">Controles nativos adicionales</string>
     <string name="video_controls_additional_options_hint">Las opciones se pasan solo cuando el binario nativo y el flujo seleccionados las admiten. Deja un campo vacío para usar el valor nativo.</string>
-    <string name="video_controls_additional_unavailable">Controles no disponibles para esta familia o binario nativo: %1$d. Se conservan los valores guardados para recuperarlos.</string>
+    <string name="video_controls_additional_family_ignored">Hay valores guardados de un control que la familia de modelo seleccionada no usa (pasada de alto ruido). Se conservan, pero se ignoran en esta ejecución.</string>
+    <string name="video_controls_additional_binary_ignored">Algunos controles guardados no son compatibles con el binario nativo seleccionado. Se conservan, pero se ignoran en esta ejecución; elige un binario más reciente para usarlos.</string>
     <string name="video_controls_additional_sampler">Controles del muestreador</string>
     <string name="video_controls_img_cfg_scale">Escala CFG de imagen</string>
     <string name="video_controls_guidance">Guidance</string>

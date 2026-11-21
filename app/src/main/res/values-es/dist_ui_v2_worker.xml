@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Hub -->
+    <string name="dist_ui_hub_title">Compartir IA entre teléfonos</string>
+    <string name="dist_ui_hub_how_1">En cada teléfono ayudante, abre Dispositivo ayudante y toca Empezar a compartir.</string>
+    <string name="dist_ui_hub_how_2">En el teléfono principal, abre Dispositivo principal. Encuentra a los ayudantes en tu Wi-Fi.</string>
+    <string name="dist_ui_hub_how_3">Elige un modelo y empieza. El modelo se reparte entre todos los teléfonos.</string>
+    <string name="dist_ui_hub_section_llm">Chat y modelos de texto</string>
+    <string name="dist_ui_hub_section_media">Imágenes y vídeo</string>
+    <string name="dist_ui_hub_main_title">Usa este teléfono para ejecutar un modelo</string>
+    <string name="dist_ui_hub_main_desc">Dispositivo principal (master): este teléfono carga el modelo y conversa. Los teléfonos ayudantes prestan su memoria para que quepan modelos más grandes.</string>
+    <string name="dist_ui_hub_main_btn">Abrir dispositivo principal</string>
+    <string name="dist_ui_hub_helper_title">Presta la memoria de este teléfono</string>
+    <string name="dist_ui_hub_helper_desc">Dispositivo ayudante (worker): otro teléfono ejecuta el modelo y toma prestada parte de la memoria de este por Wi-Fi.</string>
+    <string name="dist_ui_hub_helper_btn">Abrir dispositivo ayudante</string>
+    <string name="dist_ui_hub_media_title">Repartir trabajos de imagen y vídeo</string>
+    <string name="dist_ui_hub_media_desc">Usa varios teléfonos a la vez para generar imágenes y vídeo con Stable Diffusion.</string>
+    <string name="dist_ui_hub_info_title">Antes de empezar</string>
+    <string name="dist_ui_hub_info_wifi">Todos los teléfonos deben estar en la misma red Wi-Fi. Una red más rápida (5 GHz) da respuestas más rápidas.</string>
+    <string name="dist_ui_hub_info_vpn">Desactiva cualquier VPN o modo de red de invitados mientras compartes. Pueden impedir que los teléfonos se vean entre sí.</string>
+    <string name="dist_ui_hub_info_security">La conexión no está cifrada. Úsala solo en una red de confianza, como tu Wi-Fi de casa.</string>
+
+    <!-- Helper device screen -->
+    <string name="dist_ui_w_title">Dispositivo ayudante</string>
+    <string name="dist_ui_w_how_1">Elige cuánta memoria prestar y toca Empezar a compartir.</string>
+    <string name="dist_ui_w_how_2">En el dispositivo principal, este móvil aparece solo en la lista de ayudantes. Si no aparece, añádelo allí con la dirección que se muestra aquí.</string>
+    <string name="dist_ui_w_how_3">Mantén este teléfono encendido y en Wi-Fi. El dispositivo principal hace el resto.</string>
+    <string name="dist_ui_w_status_idle_title">Listo para compartir</string>
+    <string name="dist_ui_w_status_idle_message">No se comparte nada hasta que toques Empezar a compartir.</string>
+    <string name="dist_ui_w_status_blocked_title">No hay memoria libre suficiente</string>
+    <string name="dist_ui_w_status_blocked_message">Libera al menos %1$d MB de memoria (cierra otras apps) para compartir este teléfono.</string>
+    <string name="dist_ui_w_status_waiting_title">Esperando al dispositivo principal</string>
+    <string name="dist_ui_w_status_waiting_message">Compartiendo %1$s de memoria como «%2$s». Inicia la búsqueda en el dispositivo principal o escanea el código QR de abajo.</string>
+    <string name="dist_ui_w_status_connected_title">Dispositivo principal conectado</string>
+    <string name="dist_ui_w_status_connected_message">Está usando %1$s de la memoria de este teléfono. Mantén el teléfono en Wi-Fi hasta que dejes de compartir.</string>
+    <string name="dist_ui_w_connect_title">Conectar el dispositivo principal</string>
+    <string name="dist_ui_w_connect_message">En el dispositivo principal, este móvil aparece solo en la lista de ayudantes. Si no aparece, toca Añadir un ayudante a mano e introduce esta dirección.</string>
+    <string name="dist_ui_w_connect_address">O añade este teléfono a mano con esta dirección</string>
+    <string name="dist_ui_w_share_title">Memoria a prestar</string>
+    <string name="dist_ui_w_share_explain">El dispositivo principal puede usar hasta esta cantidad de la memoria de este teléfono para guardar parte del modelo. Presta menos para que el teléfono siga fluido, o más para que el principal ejecute modelos más grandes.</string>
+    <string name="dist_ui_w_share_note">Esta cantidad no se impone en este teléfono. Introduce la misma cantidad para este teléfono en el dispositivo principal para que planifique con ella.</string>
+    <string name="dist_ui_w_mem_reserved">Reservada para Android</string>
+    <string name="dist_ui_w_mem_lending">Prestada al dispositivo principal</string>
+    <string name="dist_ui_w_adv_title">Ajustes avanzados</string>
+    <string name="dist_ui_w_adv_locked_note">Estos ajustes se pueden cambiar mientras no se esté compartiendo.</string>
+    <string name="dist_ui_w_adv_threads">Hilos del procesador: %1$d</string>
+    <string name="dist_ui_w_adv_threads_desc">Más hilos pueden ser más rápidos, pero calientan el teléfono y ralentizan otras apps. Cuatro es un buen punto de partida.</string>
+    <string name="dist_ui_w_adv_cache">Recordar partes del modelo</string>
+    <string name="dist_ui_w_adv_cache_desc">Guarda las partes del modelo que recibió este teléfono, así reconectar con el mismo modelo es mucho más rápido. Usa almacenamiento.</string>
+    <string name="dist_ui_w_adv_cache_size">Guardado en este teléfono: %1$s</string>
+    <string name="dist_ui_w_adv_cache_clear">Borrar partes guardadas del modelo</string>
+    <string name="dist_ui_w_adv_port">Puerto de conexión: %1$d. El dispositivo principal lo usa para llegar a este teléfono; se elige automáticamente.</string>
+    <string name="dist_ui_w_monitor_title">Ver el dispositivo principal (avanzado)</string>
+    <string name="dist_ui_w_monitor_desc">Abre en este teléfono la página web del dispositivo principal para seguir el chat. Introduce su dirección y puerto.</string>
+    <string name="dist_ui_w_monitor_address">Dirección del dispositivo principal</string>
+    <string name="dist_ui_w_start">Empezar a compartir</string>
+    <string name="dist_ui_w_stop">Dejar de compartir</string>
+</resources>

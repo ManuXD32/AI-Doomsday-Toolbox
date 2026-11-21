@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="worlds_ui_card_title_html">HTML page</string>
+    <string name="worlds_ui_card_title">3D world</string>
+    <string name="worlds_ui_play">Play</string>
+    <string name="worlds_ui_stop">Stop</string>
+    <string name="worlds_ui_fullscreen">Fullscreen</string>
+    <string name="worlds_ui_save">Save</string>
+    <string name="worlds_ui_saved">Saved to Library</string>
+    <string name="worlds_ui_open">Open</string>
+    <string name="worlds_ui_run_html">Run HTML</string>
+    <string name="worlds_ui_rename">Rename</string>
+    <string name="worlds_ui_delete">Delete</string>
+    <string name="worlds_ui_cancel">Cancel</string>
+    <string name="worlds_ui_confirm">OK</string>
+    <string name="worlds_ui_rename_title">Rename world</string>
+    <string name="worlds_ui_title_label">Title</string>
+    <string name="worlds_ui_delete_title">Delete world?</string>
+    <string name="worlds_ui_delete_message">\"%1$s\" will be removed from this device.</string>
+    <string name="worlds_ui_default_title">3D world</string>
+    <string name="worlds_ui_library_title">HTML &amp; 3D worlds</string>
+    <string name="worlds_ui_library_subtitle">Interactive scenes saved from chats. They run offline.</string>
+    <string name="worlds_ui_empty_title">No saved worlds yet</string>
+    <string name="worlds_ui_empty_body">Pick the \"3D World Builder\" prompt profile in a chat and ask for a scene, for example an elephant enclosure made of voxels. When the reply contains a world, tap Save on its card and it will appear here.</string>
+    <string name="worlds_ui_not_found">This world could not be loaded.</string>
+
+    <string name="llama_prompt_profile_world_builder">3D World Builder</string>
+    <string name="llama_prompt_profile_world_builder_prompt">You build interactive 3D worlds that run offline in a WebView with three.js. Write the FIRST version as ONE complete HTML file inside a single ```html code block, with only a short explanation outside it; the app saves that block as worlds/&lt;name&gt;.html in this chat\'s workspace. Rules: use &lt;script type=\"module\"&gt; with import * as THREE from \'three\' (addons from \'three/addons/…\'). Do not load external textures, models, fonts or images; make everything procedurally from geometries, colors and canvas textures. Give every important object a unique name (mesh.name = \'elephant\') because names become the \"Places\" list in the app. The app already adds touch controls (joystick, drag to look, walk/fly, reset view), so do not write your own camera controls. For voxel scenes use loops and small helper functions (for example addBox(x, y, z, color)) to keep the code short. Add lights, a ground and a sky color. Run an animation loop that calls renderer.render(scene, camera) and handle window resize. Make sure the HTML is complete and closed with &lt;/html&gt;. To FIX or CHANGE an existing world, never output the whole file again: use search_workspace_file to find the code, read_workspace_file with a line range to see it, and replace_in_workspace_file for the edit (edit_workspace_lines for several lines). The app shows the updated file as a card with the latest version.</string>
+    <string name="worlds_ui_latest_version">Latest version of %1$s</string>
+    <string name="worlds_ui_workspace_path">Workspace file: %1$s</string>
+    <string name="worlds_ui_hide_controls">Hide controls</string>
+    <string name="worlds_ui_show_controls">Show controls</string>
+    <string name="worlds_ui_file_saved">File saved</string>
+    <string name="worlds_ui_file_save_failed">Could not save the file</string>
+    <string name="llama_prompt_profile_world_coder">3D Coder (three.js)</string>
+    <string name="llama_prompt_profile_world_coder_prompt">Use only the Three.js core ES module from https://cdnjs.cloudflare.com/ajax/libs/three.js/0.160.0/three.module.min.js. Do not import addons or legacy examples/js paths; implement any camera controls directly inside the HTML. Editing rules. The first version: reply with ONE complete ```html block; the app saves it as worlds/&lt;name&gt;.html. To change an existing world: call search_workspace_file to find the lines, then replace_in_workspace_file with the exact old text. NEVER output the whole file again. After editing, reply with one short sentence. Example: search_workspace_file {\"path\":\"worlds/rose.html\",\"query\":\"petal\"} then replace_in_workspace_file {\"path\":\"worlds/rose.html\",\"old_text\":\"0xff0000\",\"new_text\":\"0xff66aa\"}.</string>
+    <string name="llama_prompt_profile_world_coder_glb">3D Asset Coder (GLB)</string>
+    <string name="llama_prompt_profile_world_coder_glb_prompt">Create game assets for the Godot editor, which uses GLB files. Create whatever the user requests as a good-quality low-poly asset using only Three.js in one complete standalone HTML file. The HTML must show the asset and include an Export GLB button that downloads a working GLB. If the requested asset needs animation, add it and include the animation in the exported GLB; otherwise make it static. Editing rules. The first version: reply with ONE complete ```html block; the app saves it as worlds/&lt;name&gt;.html. To change an existing world: call search_workspace_file to find the lines, then replace_in_workspace_file with the exact old text. NEVER output the whole file again. After editing, reply with one short sentence. Example: search_workspace_file {\"path\":\"worlds/rose.html\",\"query\":\"petal\"} then replace_in_workspace_file {\"path\":\"worlds/rose.html\",\"old_text\":\"0xff0000\",\"new_text\":\"0xff66aa\"}.</string>
+    <string name="llama_bundle_world_coder_title">3D World Builder · Qwen3.5 4B 3D Coder (Q4_K_M)</string>
+    <string name="llama_bundle_world_coder_desc">Builds three.js worlds as a single HTML file. Includes the vision projector. Use it with the \"3D Coder (three.js)\" prompt profile and a 65536 context.</string>
+    <string name="llama_bundle_world_coder_glb_title">3D Asset Builder (GLB) · Qwen3.5 4B GLB 3D Coder (Q4_K_M)</string>
+    <string name="llama_bundle_world_coder_glb_desc">Builds low-poly game assets with an Export GLB button for Godot. Includes the vision projector (shared with the other 3D coder). Use it with the \"3D Asset Coder (GLB)\" prompt profile and a 65536 context.</string>
+</resources>

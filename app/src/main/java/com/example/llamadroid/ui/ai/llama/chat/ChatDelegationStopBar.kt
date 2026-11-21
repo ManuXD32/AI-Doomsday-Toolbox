@@ -61,7 +61,7 @@ internal fun ChatDelegationStopBar(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val api = remember(context) { NativeChatDelegation.get(context.applicationContext) }
-    val task by remember(chatId) { api.observeLatestTask(chatId) }.collectAsState(initial = null)
+    val task: com.example.llamadroid.data.model.NativeChatDelegateTaskEntity? by remember(chatId) { api.observeLatestTask(chatId) }.collectAsState(initial = null)
     var confirming by remember { mutableStateOf(false) }
     val current = task
     if (current == null || !delegationStopBarVisible(current.state)) return

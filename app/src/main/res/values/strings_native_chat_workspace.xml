@@ -11,4 +11,23 @@
     <string name="native_chat_workspace_io_error">The workspace action failed. Check the file name and try again.</string>
     <string name="native_chat_workspace_new_file">New file</string>
     <string name="native_chat_workspace_new_folder">New folder</string>
+    <string name="native_chat_workspace_select_all">Select all</string>
+    <string name="native_chat_workspace_open_with">Open with another app</string>
+    <string name="native_chat_workspace_no_app">No app can open this file.</string>
+    <string name="native_chat_workspace_chosen_folder">the chosen folder</string>
+    <string name="native_chat_files_row_title">Chat files</string>
+    <string name="native_chat_files_row_desc">Browse, download or delete the files in this chat\'s workspace.</string>
+    <string name="native_chat_files_row_open">Open</string>
+    <plurals name="native_chat_workspace_selected">
+        <item quantity="one">%1$d selected</item>
+        <item quantity="other">%1$d selected</item>
+    </plurals>
+    <plurals name="native_chat_workspace_saved">
+        <item quantity="one">Saved %1$d file to %2$s</item>
+        <item quantity="other">Saved %1$d files to %2$s</item>
+    </plurals>
+    <plurals name="native_chat_workspace_delete_confirm">
+        <item quantity="one">Delete %1$d selected item from this chat\'s workspace? This cannot be undone.</item>
+        <item quantity="other">Delete %1$d selected items from this chat\'s workspace? This cannot be undone.</item>
+    </plurals>
 </resources>

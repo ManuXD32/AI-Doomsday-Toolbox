@@ -114,6 +114,8 @@ import com.example.llamadroid.ui.models.OnnxModelsScreen
 import com.example.llamadroid.ui.models.ModelShareScreen
 import com.example.llamadroid.ui.models.LiteRtModelsScreen
 import com.example.llamadroid.ui.notes.NotesManagerScreen
+import com.example.llamadroid.worlds.ui.WorldLibraryScreen
+import com.example.llamadroid.worlds.ui.WorldViewerScreen
 import com.example.llamadroid.ui.knowledge.KnowledgeBaseScreen
 import com.example.llamadroid.ui.knowledge.KnowledgeChunkReaderScreen
 import com.example.llamadroid.ui.ai.VideoSumupScreen
@@ -128,6 +130,7 @@ import com.example.llamadroid.ui.distributed.NetworkVisualizationScreen
 import com.example.llamadroid.ui.distributed.SdDistributedHubScreen
 import com.example.llamadroid.ui.distributed.SdDistributedMasterScreen
 import com.example.llamadroid.ui.distributed.SdDistributedNetworkScreen
+import com.example.llamadroid.ui.distributed.SdDistributedVideoScreen
 import com.example.llamadroid.ui.distributed.SdDistributedRunConfigScreen
 import com.example.llamadroid.ui.distributed.SdDistributedWorkerScreen
 import com.example.llamadroid.ui.settings.WelcomeScreen
@@ -138,6 +141,11 @@ import com.example.llamadroid.ui.settings.BenchmarkScreen
 import com.example.llamadroid.ui.ai.DatasetScreen
 import com.example.llamadroid.ui.ai.QuadtrixTrainerScreen
 import com.example.llamadroid.ui.ai.QuadtrixWebUiScreen
+import com.example.llamadroid.ui.distributed.branchy.BranchyHelperScreen
+import com.example.llamadroid.ui.distributed.branchy.BranchyInferenceMainScreen
+import com.example.llamadroid.ui.training.BranchyTrainerScreen
+import com.example.llamadroid.ui.training.DatasetLibraryScreen
+import com.example.llamadroid.ui.training.TrainingHubScreen
 import com.example.llamadroid.ui.ai.TermuxScreen
 import com.example.llamadroid.ui.ai.TermuxWebViewScreen
 import com.example.llamadroid.ui.ai.TermuxFileManagerScreen
@@ -596,7 +604,10 @@ fun LlamaApp(
             LocalServerProfileEditorOpener provides { cardId, modelPath ->
                 navController.navigate(serverProfileEditorRoute(cardId, modelPath))
             },
-            LocalTamaNotice provides tamaNotice
+            LocalTamaNotice provides tamaNotice,
+            com.example.llamadroid.ui.settings.chat.LocalChatGlobalSettingsOpener provides { section ->
+                navController.navigate(com.example.llamadroid.ui.settings.chat.ChatSettingsSection.route(section))
+            }
         ) {
         Box(Modifier.fillMaxSize()) {
         NavHost(
@@ -731,6 +742,11 @@ fun LlamaApp(
             composable(Screen.VideoUpscaler.route) { VideoUpscalerScreen(navController) }
             composable(Screen.VideoInterpolation.route) { VideoInterpolationScreen(navController) }
             composable(Screen.SubtitleBurn.route) { SubtitleBurnScreen(navController) }
+            composable(Screen.WorldLibrary.route) { WorldLibraryScreen(navController) }
+            composable(
+                Screen.WorldViewer.route,
+                arguments = listOf(androidx.navigation.navArgument("worldId") { type = androidx.navigation.NavType.StringType })
+            ) { entry -> WorldViewerScreen(navController, entry.arguments?.getString("worldId").orEmpty()) }
             composable(Screen.NotesManager.route) { NotesManagerScreen(navController, asRoot = true) }
             composable(Screen.KnowledgeBase.route) { KnowledgeBaseScreen(navController) }
             composable(
@@ -772,6 +788,15 @@ fun LlamaApp(
             // Settings sub-screens
             composable("settings_general") { GeneralSettingsScreen(navController) }
             composable("settings_llm") { LLMSettingsScreen(navController) }
+            composable(
+                com.example.llamadroid.ui.settings.chat.ChatSettingsSection.ROUTE_PATTERN,
+                arguments = listOf(navArgument("section") { type = NavType.StringType; nullable = true; defaultValue = null })
+            ) { entry ->
+                com.example.llamadroid.ui.settings.chat.ChatGlobalSettingsScreen(
+                    navController,
+                    com.example.llamadroid.ui.settings.chat.ChatSettingsSection.fromArg(entry.arguments?.getString("section"))
+                )
+            }
             composable(
                 Screen.ServerProfileEditor.route,
                 arguments = listOf(
@@ -824,6 +849,8 @@ fun LlamaApp(
             composable(Screen.SdDistributedHub.route) { SdDistributedHubScreen(navController) }
             composable(Screen.SdDistributedWorker.route) { SdDistributedWorkerScreen(navController) }
             composable(Screen.SdDistributedMaster.route) { SdDistributedMasterScreen(navController) }
+            composable(Screen.SdDistributedImages.route) { SdDistributedMasterScreen(navController) }
+            composable(Screen.SdDistributedVideo.route) { SdDistributedVideoScreen(navController) }
             composable(Screen.SdDistributedNetwork.route) { SdDistributedNetworkScreen(navController) }
             composable(Screen.SdDistributedRunConfig.route) { SdDistributedRunConfigScreen(navController) }
             composable(Screen.SdDistributedGallery.route) {
@@ -834,6 +861,11 @@ fun LlamaApp(
             composable(Screen.BenchmarkHistory.route) { BenchmarkHistoryScreen(navController) }
             // Dataset Creator
             composable(Screen.Dataset.route) { DatasetScreen(navController) }
+            composable(Screen.Training.route) { TrainingHubScreen(navController) }
+            composable(Screen.DatasetLibrary.route) { DatasetLibraryScreen(navController) }
+            composable(Screen.BranchyTrainer.route) { BranchyTrainerScreen(navController) }
+            composable(Screen.BranchyHelper.route) { BranchyHelperScreen(navController) }
+            composable(Screen.BranchyInference.route) { BranchyInferenceMainScreen(navController) }
             composable(Screen.QuadtrixTrainer.route) { QuadtrixTrainerScreen(navController) }
             composable(
                 Screen.QuadtrixWebUi.route,

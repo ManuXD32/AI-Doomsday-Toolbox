@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="web_search_backend_title">Búsqueda web</string>
+    <string name="web_search_backend_desc">Qué buscador usa la herramienta web_search en los chats y en el Harness. Si eliges SearXNG se prueba primero; DuckDuckGo queda como respaldo.</string>
+    <string name="web_search_backend_duckduckgo">DuckDuckGo (predeterminado)</string>
+    <string name="web_search_backend_searxng">SearXNG</string>
+    <string name="web_search_backend_url_label">Dirección de SearXNG</string>
+    <string name="web_search_backend_url_hint">https://searx.ejemplo.org</string>
+    <string name="web_search_backend_url_help">Déjala vacía para usar la instancia SearXNG de la app cuando esté instalada. La instancia debe permitir format=json.</string>
+    <string name="web_search_backend_url_invalid">Introduce una dirección http:// o https:// válida.</string>
+    <string name="web_search_backend_test">Probar búsqueda</string>
+    <string name="web_search_backend_testing">Probando…</string>
+    <string name="web_search_backend_test_ok">La búsqueda funcionó. Resultados: %1$d</string>
+    <string name="web_search_backend_test_empty">La búsqueda respondió pero sin resultados.</string>
+    <string name="web_search_backend_test_failed">La búsqueda falló: %1$s</string>
+    <string name="web_search_backend_test_elapsed">Tiempo (ms): %1$d</string>
+    <string name="web_search_backend_test_failing">Motores que no respondieron:</string>
+    <string name="web_search_backend_test_engine_line">- %1$s: %2$s</string>
+    <string name="web_search_backend_chat_link">Buscador: %1$s. Cámbialo en Ajustes, General, Búsqueda web.</string>
+</resources>

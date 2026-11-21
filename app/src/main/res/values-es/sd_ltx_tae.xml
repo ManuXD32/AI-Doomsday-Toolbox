@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="video_ltx09_unsupported">LTX-Video 0.9.x no es compatible con este motor. Usa LTX 2.3 o 2.5 (requiere Gemma 3 12B, conectores, VAE de video y VAE de audio).</string>
+</resources>

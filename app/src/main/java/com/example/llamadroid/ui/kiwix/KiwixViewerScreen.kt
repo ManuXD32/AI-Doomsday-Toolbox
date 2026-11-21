@@ -332,6 +332,11 @@ fun KiwixWebView(
                         onNavigationChanged(view?.canGoBack() == true, view?.canGoForward() == true)
                     }
                     
+                    override fun onRenderProcessGone(view: WebView?, detail: android.webkit.RenderProcessGoneDetail?): Boolean {
+                        // Keep the app alive; the dead view is destroyed when the screen leaves composition.
+                        return true
+                    }
+
                     override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
                         // Keep all navigation within the WebView
                         return false

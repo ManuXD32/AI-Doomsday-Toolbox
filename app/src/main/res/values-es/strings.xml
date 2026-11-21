@@ -819,9 +819,6 @@
     <!-- Componentes Compartidos (Worker / Master) -->
     <string name="dist_load_command">Cargar Comando</string>
     <string name="dist_save_command">Guardar Comando</string>
-    <string name="dist_web_monitor">Monitor WebUI del maestro</string>
-    <string name="dist_web_monitor_desc">Ver y controlar la interfaz de inferencia del maestro.</string>
-    <string name="dist_master_ip">IP del maestro</string>
     <string name="dist_open_monitor">Abrir monitor</string>
     <string name="dist_save_command_title">Guardar Comando Personalizado</string>
     <string name="dist_save_command_desc">Guarda los ajustes actuales del modelo como un preajuste.</string>
@@ -919,7 +916,6 @@
     <string name="general_output_folder">Carpeta de Salida</string>
     <string name="general_output_default">Almacenamiento interno</string>
     <string name="general_output_hint">Para imágenes, transcripciones y videos</string>
-    <string name="general_helper_models_hint">Los modelos auxiliares (generación de títulos, visión) están en Chats ⋮ → Modelos auxiliares.</string>
     <string name="general_language">Idioma</string>
     <string name="general_language_system">Sistema</string>
     <string name="general_language_en">English</string>
@@ -1637,6 +1633,7 @@
     <string name="llama_regenerate">Regenerar</string>
     <string name="llama_stop">Detener</string>
     <string name="llama_generation_stopping">Deteniendo generacion...</string>
+    <string name="llama_generation_still_running">Todavia se esta generando una respuesta en este chat. Espera a que termine o detenla y vuelve a intentarlo.</string>
     <string name="llama_error">Error: %s</string>
     <string name="llama_no_servers">Sin servidores</string>
     <string name="llama_no_chats">Sin chats</string>
@@ -3974,7 +3971,6 @@
     <string name="imagegen_vae">VAE</string>
 
     <!-- Inferencia Distribuida -->
-    <string name="dist_title">Inferencia Distribuida</string>
     <string name="dist_worker_mode">Modo Trabajador</string>
     <string name="dist_master_mode">Modo Maestro</string>
     <string name="dist_worker_ram_label">RAM del Trabajador (MB)</string>
@@ -3998,11 +3994,9 @@
     <string name="dist_auto_load_desc">Dejar en blanco para auto (basado en RAM)</string>
     <string name="dist_tap_to_select_model">Toca para seleccionar modelo</string>
     <string name="dist_models_available">%d modelo(s) disponible(s)</string>
-    <string name="dist_your_ram_contribution">Tu contribución de RAM</string>
     <string name="dist_offload_all">Enviar todo a los Workers</string>
     <string name="dist_offload_all_desc">El máster no retiene capas. Todas las capas del modelo se enviarán a los workers. Requiere suficiente RAM en los workers para todo el modelo.</string>
     <string name="dist_available_ram">Disponible: %d MB</string>
-    <string name="dist_model_settings_title">⚙️ Ajustes del Modelo</string>
     <string name="dist_context_size">Tamaño de Contexto</string>
     <string name="dist_tokens">tokens</string>
     <string name="dist_temperature">Temperatura</string>
@@ -4011,7 +4005,6 @@
     <string name="dist_network_visibility">Visibilidad de Red</string>
     <string name="dist_host_public">Host: 0.0.0.0 (accesible desde la red)</string>
     <string name="dist_host_local">Host: 127.0.0.1 (solo local)</string>
-    <string name="dist_kv_cache_title">🧠 Caché KV</string>
     <string name="dist_kv_placement_title">Ubicación de la caché KV</string>
     <string name="dist_kv_placement_distributed">Distribuir con las capas del modelo</string>
     <string name="dist_kv_placement_distributed_desc">Mantiene la caché KV alineada con los participantes seleccionados para el modelo.</string>
@@ -4054,7 +4047,6 @@
     <string name="dist_flash_attention_desc">Reduce significativamente el uso de memoria y acelera la inferencia</string>
     
     <!-- Advanced Settings -->
-    <string name="dist_advanced_settings_title">⚙️ Ajustes Avanzados</string>
     <string name="dist_advanced_parallel">Paralelo (-np)</string>
     <string name="dist_advanced_cache_ram">RAM del Caché de Contexto (MB)</string>
     <string name="dist_advanced_custom_flags">Banderas Personalizadas</string>
@@ -4071,9 +4063,7 @@
     <string name="dist_speculative_desc">Usa un modelo borrador pequeño para predecir tokens más rápido</string>
     <string name="dist_speculative_draft_model">Modelo Borrador</string>
     <string name="dist_speculative_select_draft">Seleccionar modelo borrador</string>
-    <string name="dist_speculative_no_draft">Ningún modelo borrador seleccionado</string>
     <string name="dist_speculative_clear_draft">Limpiar</string>
-    <string name="dist_speculative_ram_warning">⚠️ El modelo borrador (%dMB) se carga en el dispositivo maestro junto al modelo principal</string>
     <string name="dist_speculative_draft_max">Máx. tokens borrador</string>
     <string name="dist_speculative_block_size">Tamaño del bloque borrador (--spec-draft-n-max)</string>
     <string name="dist_speculative_block_size_hint">DFlash y DSpark generan esta cantidad de tokens por bloque; llama.cpp lo limita al tamaño entrenado.</string>
@@ -4081,7 +4071,6 @@
     <string name="dist_speculative_placement_master_dedicated">Maestro (solo MTP)</string>
     <string name="dist_speculative_draft_min">Mín. tokens borrador</string>
     <string name="dist_speculative_draft_p_min">Probabilidad mínima de aceptación</string>
-    <string name="dist_speculative_draft_p_min_desc">Menor = borrador más agresivo</string>
     <string name="dist_speculative_draft_threads">Hilos del borrador</string>
     <string name="dist_speculative_draft_threads_batch">Hilos de lote del borrador</string>
     <string name="dist_speculative_mode_label">Modo especulativo</string>
@@ -4159,7 +4148,6 @@
     <string name="dist_remote_whitelist">Lista Blanca de IP (separadas por coma)</string>
     <string name="dist_remote_whitelist_hint">Dejar vacío para permitir todas las IP</string>
     <string name="dist_remote_warning_all_ips">⚠️ Advertencia: Todas las IP pueden conectarse si tienen la contraseña.</string>
-    <string name="dist_remote_logs">Registros Remotos</string>
     <string name="dist_remote_client_desc">Conectarse a otro dispositivo maestro para controlarlo</string>
     <string name="dist_remote_connect">Conectar a Maestro</string>
     <string name="dist_remote_ip">Dirección IP del Maestro</string>
@@ -4181,8 +4169,6 @@
     <string name="dist_remote_context_size">Tamaño de Contexto (Remoto)</string>
     <string name="dist_remote_temperature">Temperatura (Remoto)</string>
     <string name="dist_remote_kv_enable">Habilitar Caché KV</string>
-    <string name="dist_remote_kv_k">Tipo K (KV)</string>
-    <string name="dist_remote_kv_v">Tipo V (KV)</string>
     <string name="dist_remote_kv_reuse">Reutilizar Contexto</string>
 
     <string name="dist_remote_download_title">Descargar Modelo</string>
@@ -4234,8 +4220,6 @@
     <string name="dist_remote_logs_copied">Registros copiados al portapapeles</string>
 
     <string name="dist_workers_count">Trabajadores (%d)</string>
-    <string name="dist_no_workers">No hay trabajadores conectados</string>
-    <string name="dist_no_workers_hint">Inicia el modo Trabajador en otro dispositivo,\nluego toca \'Añadir Trabajador\' para ingresar su IP:PUERTO</string>
     <string name="dist_total_ram">RAM Total: %d MB</string>
     <string name="dist_model_ram_requirement">El modelo necesita ~%d MB</string>
     <string name="dist_started_msg">Iniciado con %d trabajador(es). Consulta el panel para ver el estado.</string>
@@ -4254,11 +4238,6 @@
     <string name="dist_worker_load">%d%% de carga</string>
     <string name="dist_worker_load_line">Carga: %1$s</string>
     <string name="dist_auto">Auto</string>
-    <string name="dist_load_distribution_title">📊 Distribución de Carga</string>
-    <string name="dist_master_load_label">Maestro: %1$d%% (%2$dMB)</string>
-    <string name="dist_worker_load_set">%1$d%% (fijo)</string>
-    <string name="dist_worker_load_auto">%1$d%% (auto)</string>
-    <string name="dist_nearby_workers_title">Trabajadores Cercanos (NSD)</string>
     <string name="dist_worker_added">¡Trabajador añadido!</string>
 
     <!-- Kiwix -->
@@ -4328,31 +4307,16 @@
     <string name="pdf_parameters">Parámetros</string>
     <string name="pdf_max_tokens">Máximo de Tokens</string>
     <string name="pdf_select_pdf">Seleccionar PDF</string>
-    <string name="dist_ram_to_share">RAM para Compartir</string>
     <string name="dist_total_avail_ram">Disponible: %1$d MB / Total: %2$d MB</string>
-    <string name="dist_threads_count">Hilos: %d</string>
-    <string name="dist_enable_local_cache">Activar Caché Local</string>
-    <string name="dist_local_cache_desc">Caché de capas localmente para una reconexión más rápida</string>
-    <string name="dist_clear_worker_cache">Borrar caché del worker</string>
     <string name="dist_worker_cache_cleared">Caché RPC del worker borrada.</string>
     <string name="dist_worker_cache_clear_running">Detén el worker antes de borrar su caché RPC.</string>
     <string name="dist_worker_cache_clear_failed">No se pudo borrar la caché RPC del worker: %1$s</string>
-    <string name="dist_worker_ram_budget_warning">El worker no aplica este presupuesto de RAM. Solo es un recordatorio; introduce el mismo presupuesto para este dispositivo en el master para que se use al colocar el trabajo.</string>
     <string name="dist_your_ip_label">Tu Dirección IP</string>
     <string name="dist_not_connected">No conectado a la red</string>
-    <string name="dist_scan_to_connect">📲 Escanear para Conectar</string>
-    <string name="dist_worker_tip_master">Ingresa esta dirección en el diálogo \'Añadir Trabajador\' del Maestro</string>
-    <string name="dist_master_connected">¡Maestro Conectado!</string>
     <string name="dist_waiting_for_master">Esperando al Maestro...</string>
     <string name="dist_processing_layers">Procesando capas del dispositivo maestro</string>
     <string name="dist_sharing_ram">Compartiendo %d MB de RAM</string>
-    <string name="dist_start_worker">Iniciar Trabajador</string>
-    <string name="dist_stop_worker">Detener Trabajador</string>
-    <string name="dist_worker_active">Trabajador Activo</string>
-    <string name="dist_ready_to_start">Listo para Iniciar</string>
-    <string name="dist_receiving_layers">Recibiendo capas del modelo...</string>
     <string name="dist_waiting_for_master_connect">Esperando a que el maestro se conecte</string>
-    <string name="dist_configure_worker_ram">Configura la RAM e inicia el trabajador</string>
     <string name="whisper_models_desc">Modelos más grandes = mejor precisión, menor velocidad</string>
     <string name="model_share_instructions">Escanea el QR o abre la URL para descargar modelos</string>
     <string name="model_share_active_downloads">%d descarga(s) activa(s)</string>
@@ -4367,14 +4331,6 @@
     <string name="agent_action_stop">Detener</string>
     <string name="agent_action_cancel">Cancelar</string>
     <string name="kiwix_loading_count">Cargando %d archivo(s) ZIM</string>
-    <string name="dist_role_master_title">Ser el MAESTRO</string>
-    <string name="dist_role_master_desc">Aloja el archivo del modelo y coordina la inferencia entre los trabajadores conectados.</string>
-    <string name="dist_role_master_btn">Configurar Maestro</string>
-    <string name="dist_role_worker_title">Ser un TRABAJADOR</string>
-    <string name="dist_role_worker_desc">Ayuda a procesar capas del modelo para un dispositivo maestro. Elige cuánta RAM compartir.</string>
-    <string name="dist_role_worker_btn">Iniciar Trabajador</string>
-    <string name="dist_wifi_warning">Todos los dispositivos deben estar en la misma red WiFi. El rendimiento depende de la velocidad de la red.</string>
-    <string name="dist_rpc_warning">RPC no está cifrado. Úsalo solo en redes locales de confianza.</string>
     <string name="approval_title">📋 Aprobaciones Pendientes (%d)</string>
     <string name="approval_no_pending">No hay aprobaciones pendientes</string>
     <string name="approval_new_file">📄 NUEVO</string>
@@ -4980,7 +4936,6 @@
     <string name="net_clear_workers">> LIMPIAR_TRABAJADORES</string>
 
     <!-- Layer Distribution (MasterMode) -->
-    <string name="dist_layer_distribution">📊 Distribución de Capas</string>
     <string name="dist_remember_layer_split">Recordar División de Capas</string>
     <string name="dist_layer_split_desc">Mantiene la misma asignación de capas para caché del trabajador</string>
     <string name="dist_cache_type_k">Tipo de Caché K</string>
@@ -6803,7 +6758,6 @@
     <string name="adventure_gate_effect_turn_regen">Cada turno: +%1$d%% PV / +%2$d%% maná</string>
     <string name="models_type_quadtrix">Checkpoint Quadtrix</string>
     <string name="quadtrix_title">Entrenador Quadtrix</string>
-    <string name="quadtrix_hub_desc">Entrena y usa LLMs nativos en el móvil</string>
     <string name="quadtrix_eyebrow">Entrenamiento nativo</string>
     <string name="quadtrix_subtitle">Crea, reanuda, monitoriza, exporta y chatea con modelos Quadtrix directamente en este teléfono.</string>
     <string name="quadtrix_info">Información</string>
@@ -7020,6 +6974,7 @@
     <string name="llama_tool_status_kb_sources">Listando fuentes de bases de conocimiento</string>
     <string name="llama_tool_knowledge_bases">Bases de conocimiento</string>
     <string name="llama_tool_knowledge_bases_desc">Permite que las herramientas busquen solo en las bases seleccionadas para este chat.</string>
+    <string name="llama_tool_kb_document_forced_note">La búsqueda en el documento de este chat sigue activa aunque las herramientas estén desactivadas.</string>
     <string name="llama_tool_kb_auto_context">Recuperación automática</string>
     <string name="llama_tool_kb_auto_context_desc">Inyecta contexto temporal con citas desde las bases seleccionadas antes de responder.</string>
     <string name="llama_tool_kb_selected_count">%1$d bases de conocimiento seleccionadas</string>
@@ -7592,24 +7547,12 @@
     <string name="ai_servers_type_ai_hub_desc">Una sola URL lanzadora para los servidores de IA integrados que estan activos.</string>
     <string name="dashboard_sd_distributed_title">Generacion multimedia distribuida</string>
     <string name="dashboard_sd_distributed_desc">Divide trabajo de imagen, edicion, escalado y video de Stable Diffusion entre workers de una LAN de confianza.</string>
-    <string name="sd_dist_title">Generacion multimedia distribuida</string>
-    <string name="sd_dist_subtitle">Ejecuta workers RPC de stable-diffusion.cpp, elige la colocación del pipeline y aplica el plan a imagen y video.</string>
-    <string name="sd_dist_hub_worker_title">Usar este dispositivo como worker multimedia</string>
-    <string name="sd_dist_hub_worker_desc">Aporta hilos de CPU y memoria a otro dispositivo ADT que ejecute stable-diffusion.cpp.</string>
-    <string name="sd_dist_hub_master_title">Coordinar una red multimedia</string>
-    <string name="sd_dist_hub_master_desc">Añade workers de confianza manualmente y prepara la colocación backend para la siguiente generacion.</string>
     <string name="sd_dist_hub_run_title">Ajustar runtime SD</string>
     <string name="sd_dist_hub_run_desc">Ajusta RPC, backend, VAE, adaptadores, cache y vista previa del comando.</string>
-    <string name="sd_dist_open_worker">Abrir worker</string>
-    <string name="sd_dist_open_master">Abrir master</string>
     <string name="sd_dist_open_run_config">Abrir configuracion</string>
     <string name="sd_dist_open_gallery">Abrir galeria</string>
-    <string name="sd_dist_worker_title">Worker multimedia</string>
-    <string name="sd_dist_worker_subtitle">Inicia un worker RPC de stable-diffusion.cpp y controla los recursos que aporta este dispositivo.</string>
-    <string name="sd_dist_master_title">Master multimedia</string>
-    <string name="sd_dist_master_subtitle">Gestiona workers LAN de confianza, inventario de dispositivos y listas de servidores RPC para SD distribuido.</string>
     <string name="sd_dist_network_title">Red multimedia</string>
-    <string name="sd_dist_network_subtitle">Monitoriza la topologia actual del pipeline SD, workers asignados, presupuestos y logs.</string>
+    <string name="sd_dist_network_subtitle">Monitoriza la topología actual del pipeline SD, los Ayudantes asignados, presupuestos y logs.</string>
     <string name="sd_dist_gallery_title">Galeria multimedia generada</string>
     <string name="sd_dist_gallery_subtitle">Explora imagenes, ediciones, escalados y videos de Stable Diffusion desde un solo lugar.</string>
     <string name="sd_dist_gallery_all">Todo</string>
@@ -7639,7 +7582,6 @@
     <string name="sd_dist_security_warning">RPC de stable-diffusion.cpp no tiene autenticacion ni cifrado. Usalo solo en una LAN de confianza o hotspot privado. El maestro y todos los workers deben usar la misma version de ADT: el protocolo RPC cambio en esta version, por lo que los workers antiguos no pueden conectarse.</string>
     <string name="sd_dist_status_running">Worker en ejecucion</string>
     <string name="sd_dist_status_stopped">Worker detenido</string>
-    <string name="sd_dist_connection_count">%1$d conexiones</string>
     <string name="sd_dist_worker_resources">Contribucion</string>
     <string name="sd_dist_threads_to_share">Hilos de CPU a compartir</string>
     <string name="sd_dist_ram_to_share">Presupuesto de RAM</string>
@@ -7654,45 +7596,26 @@
     <string name="sd_dist_worker_cache_enable">Activar cache local de tensores RPC</string>
     <string name="sd_dist_worker_cache_clear">Borrar cache</string>
     <string name="sd_dist_worker_ram_budget_warning">El worker RPC no aplica este presupuesto de RAM. Solo es un recordatorio; introduce el mismo presupuesto para este dispositivo en el master para que el planificador lo use.</string>
-    <string name="sd_dist_start_worker">Iniciar worker</string>
-    <string name="sd_dist_stop_worker">Detener worker</string>
-    <string name="sd_dist_logs">Logs</string>
-    <string name="sd_dist_no_logs">Aún no hay logs.</string>
-    <string name="sd_dist_manual_worker">Worker manual</string>
-    <string name="sd_dist_worker_host">Host o IP del worker</string>
-    <string name="sd_dist_threads_short">hilos</string>
-    <string name="sd_dist_ram_mb_short">RAM MB</string>
-    <string name="sd_dist_add_worker">Añadir worker</string>
-    <string name="sd_dist_workers">Workers</string>
-    <string name="sd_dist_no_workers">Aún no hay workers. Añade una dirección LAN de confianza para empezar.</string>
-    <string name="sd_dist_remote_workers">Workers remotos</string>
-    <string name="sd_dist_new_worker">Nuevo worker</string>
-    <string name="sd_dist_delete_worker">Eliminar worker</string>
     <string name="sd_dist_worker_budget_line">%1$d MB - %2$d hilos</string>
-    <string name="sd_dist_rpc_servers_preview">Vista previa de servidores RPC</string>
     <string name="sd_dist_use_workers">Usar workers</string>
     <string name="sd_dist_view_network">Ver red</string>
     <string name="sd_dist_live_topology">Topologia en vivo</string>
-    <string name="sd_dist_no_active_workers">No hay workers habilitados en el plan activo.</string>
+    <string name="sd_dist_no_active_workers">No hay Ayudantes habilitados en el plan activo.</string>
     <string name="sd_dist_current_plan">Plan de colocación actual</string>
     <string name="sd_dist_enabled">Activado</string>
     <string name="sd_dist_disabled">Desactivado</string>
     <string name="sd_dist_enable_distributed">Activar SD distribuido</string>
-    <string name="sd_dist_enable_distributed_desc">Aplica flags RPC y de colocación backend a comandos de imagen, edicion, escalado y video.</string>
-    <string name="sd_dist_rpc_servers">Servidores RPC</string>
+    <string name="sd_dist_rpc_servers">Direcciones de los Ayudantes</string>
     <string name="sd_dist_placement_mode">Modo de colocación</string>
     <string name="sd_dist_placement_auto_fit">Auto-fit</string>
     <string name="sd_dist_placement_components">Componentes</string>
     <string name="sd_dist_placement_manual">Manual</string>
-    <string name="sd_dist_placement_auto_ram_desc">ADT envia presupuestos de memoria por worker y deja que stable-diffusion.cpp ajuste el modelo automaticamente.</string>
+    <string name="sd_dist_placement_auto_ram_desc">ADT envía presupuestos de memoria por Ayudante y deja que stable-diffusion.cpp ajuste el modelo automáticamente.</string>
     <string name="sd_dist_placement_auto_fit_desc">Deja que stable-diffusion.cpp coloque pesos automaticamente.</string>
-    <string name="sd_dist_placement_components_desc">Introduce colocación explicita por componente mientras ADT crea la lista de servidores.</string>
+    <string name="sd_dist_placement_components_desc">Introduce colocación explícita por componente mientras ADT crea la lista de Ayudantes.</string>
     <string name="sd_dist_placement_manual_desc">Usa solo los flags expertos sin procesar que escribas.</string>
     <string name="sd_dist_auto_fit">Auto-fit</string>
     <string name="sd_dist_auto_fit_desc">Deja que stable-diffusion.cpp coloque pesos y offload segun la memoria disponible.</string>
-    <string name="sd_dist_auto_fit_help">Auto-fit anade --auto-fit. Activa el presupuesto de memoria avanzado de abajo solo si quieres pasar tus propios presupuestos --max-vram por dispositivo.</string>
-    <string name="sd_dist_layer_split_max_vram_warning">La division explicita por capas, como diffusion=RPC0&amp;RPC1, no puede usar --max-vram para ese modulo dividido. Auto RAM usa --auto-fit con presupuestos --max-vram por worker; Componentes se queda con --backend explicito.</string>
-    <string name="sd_dist_manual_expert_flags_help">El modo Manual conserva la lista de servidores RPC de ADT pero ignora los campos estructurados de colocación. Pon cualquier flag de colocación raw de stable-diffusion.cpp en Flags expertos.</string>
     <string name="sd_dist_backend_spec">Colocacion backend</string>
     <string name="sd_dist_backend_spec_hint">Ejemplo: diffusion=RPC0&amp;RPC1,te=cpu,vae=RPC2</string>
     <string name="sd_dist_params_backend_spec">Backend de parametros</string>
@@ -7703,7 +7626,7 @@
     <string name="sd_dist_split_layer">Layer</string>
     <string name="sd_dist_split_row">Row</string>
     <string name="sd_dist_row_split_note">Layer divide capas del modelo entre dispositivos. Row divide filas dentro de las capas y upstream lo marca como solo CUDA, asi que en telefonos usa Layer.</string>
-    <string name="sd_dist_error_row_split_not_supported">Row split es solo CUDA upstream y no esta soportado para workers distribuidos en telefono. ADT usa layer split para ejecuciones SD distribuidas.</string>
+    <string name="sd_dist_error_row_split_not_supported">Row split es solo CUDA upstream y no está soportado para Ayudantes distribuidos en teléfono. ADT usa layer split para ejecuciones SD distribuidas.</string>
     <string name="sd_dist_custom_flags">Flags expertos</string>
     <string name="sd_dist_custom_flags_hint">Flags extra del runtime stable-diffusion.cpp</string>
     <string name="sd_dist_component_placement">Colocacion de componentes</string>
@@ -7742,7 +7665,6 @@
     <string name="sd_dist_frames_hint">8</string>
     <string name="sd_dist_fps">FPS</string>
     <string name="sd_dist_fps_hint">5</string>
-    <string name="sd_dist_runtime_controls">Controles de runtime</string>
     <string name="sd_dist_runtime_threads">Hilos del runtime</string>
     <string name="sd_dist_runtime_threads_hint">-1 para el valor de la app</string>
     <string name="sd_dist_mmap">Memory map</string>
@@ -7770,9 +7692,6 @@
     <string name="sd_tensor_rules_custom">Reglas tensor personalizadas</string>
     <string name="sd_tensor_rules_custom_hint">Ejemplo: ^vae\\.=f16,^first_stage_model\\.=f16</string>
     <string name="sd_tensor_rules_custom_desc">Sintaxis experta: patrones de nombre de tensor separados por comas, asignados a tipos de peso.</string>
-    <string name="sd_dist_adapter_cache_controls">Adaptadores y cache</string>
-    <string name="sd_dist_lora_strength">Fuerza LoRA</string>
-    <string name="sd_dist_lora_strength_hint">1.0</string>
     <string name="sd_dist_control_strength">Fuerza ControlNet</string>
     <string name="sd_dist_control_strength_hint">0.9</string>
     <string name="sd_dist_cache_mode">Modo de cache</string>
@@ -7792,18 +7711,7 @@
     <string name="sd_dist_budget_auto">Presupuesto automatico</string>
     <string name="sd_dist_local_only">Solo local</string>
     <string name="sd_dist_worker_notification_title">Worker multimedia SD</string>
-    <string name="sd_dist_render_farm_console">Consola de granja de render</string>
-    <string name="sd_dist_card_devices">Dispositivos y RAM</string>
-    <string name="sd_dist_card_devices_desc">Nombra workers, introduce IP y puerto manualmente, y decide cuanta RAM y CPU aporta cada telefono.</string>
-    <string name="sd_dist_card_planner">Planificador de colocación</string>
-    <string name="sd_dist_card_planner_desc">Distribuye modulos SD completos y divide difusion entre workers segun sus presupuestos de RAM.</string>
     <string name="sd_dist_card_generation_desc">Valores guardados para prompts, tamano, sampler, semillas, fuerza de edicion y tiempo de video.</string>
-    <string name="sd_dist_card_runtime_desc">Interruptores de runtime para memoria, VAE, flash attention y presupuestos backend avanzados.</string>
-    <string name="sd_dist_card_adapters_desc">LoRA, ControlNet, cache y SCM para workflows repetibles.</string>
-    <string name="sd_dist_card_expert_desc">Revisa los flags generados de stable-diffusion.cpp y anade overrides solo expertos.</string>
-    <string name="sd_dist_edit_worker">Editar worker</string>
-    <string name="sd_dist_save_worker">Guardar worker</string>
-    <string name="sd_dist_save_apply">Guardar y aplicar</string>
     <string name="sd_dist_templates">Plantillas</string>
     <string name="sd_dist_templates_desc">Guarda presets de workflow con nombre y cambia entre ellos sin reconstruir toda la configuracion.</string>
     <string name="sd_dist_template_name">Nombre de plantilla</string>
@@ -7814,42 +7722,20 @@
     <string name="sd_dist_placement_auto_ram">Plan RAM automatico</string>
     <string name="sd_dist_auto_ram_plan">Plan RAM generado</string>
     <string name="sd_dist_auto_ram_budget_preview">Presupuesto --max-vram generado</string>
-    <string name="sd_dist_auto_ram_help">ADT deriva presupuestos --max-vram por worker desde la RAM de workers activos y ejecuta --auto-fit. El mapa de componentes de abajo solo estima como esos presupuestos pueden distribuir el modelo.</string>
-    <string name="sd_dist_first_rpc_overhead_note">RPC0 siempre es el worker remoto con mas RAM. ADT reserva un pequeno presupuesto extra en RPC0 para embeddings y sobrecarga temprana de condicionamiento antes de dividir el trabajo de difusion.</string>
     <string name="sd_dist_auto_ram_scope">Alcance del plan RAM</string>
     <string name="sd_dist_auto_ram_scope_diffusion">Solo difusion</string>
-    <string name="sd_dist_auto_ram_scope_diffusion_desc">Opcion mas segura. Envia las capas de difusion a workers RPC y mantiene el codificador de texto, VAE y escalador locales salvo que elijas Componentes o Manual.</string>
+    <string name="sd_dist_auto_ram_scope_diffusion_desc">Opción más segura. Envía las capas de difusión a los Ayudantes y mantiene el codificador de texto, VAE y escalador locales salvo que elijas Componentes o Manual.</string>
     <string name="sd_dist_auto_ram_scope_full">Pipeline completo</string>
-    <string name="sd_dist_auto_ram_scope_full_desc">Avanzado. Permite que Auto RAM coloque codificador de texto, VAE, escalador y difusion en workers; requiere un worker RPC compatible y una LAN fiable.</string>
-    <string name="sd_dist_max_vram_enabled">Presupuesto de memoria backend avanzado</string>
-    <string name="sd_dist_max_vram_enabled_desc">Muestra --max-vram solo para backends aceleradores/RPC compatibles futuros. En telefonos CPU-tier normalmente usa los presupuestos de RAM de workers.</string>
+    <string name="sd_dist_auto_ram_scope_full_desc">Avanzado. Permite que Auto RAM coloque codificador de texto, VAE, escalador y difusión en los Ayudantes; requiere un Ayudante compatible y una LAN fiable.</string>
     <string name="sd_dist_this_device">Este dispositivo</string>
-    <string name="sd_dist_master_contribute">Permitir que este telefono contribuya</string>
-    <string name="sd_dist_master_contribute_desc">Usa el master como participante CPU local en el plan RAM.</string>
-    <string name="sd_dist_master_display_name">Nombre del dispositivo master</string>
     <string name="sd_dist_master_allowed_modules">Modulos que este telefono puede alojar</string>
     <string name="sd_dist_master_diffusion_share">Parte manual de difusion (%)</string>
     <string name="sd_dist_master_diffusion_share_hint">Vacio para RAM automatica</string>
     <string name="sd_dist_master_diffusion_share_desc">Dejalo vacio para que decida la RAM. Introduce 1-95 para reservar esa parte estimada de capas de difusion para este telefono.</string>
-    <string name="sd_dist_image_card_title">Generacion de imagenes</string>
-    <string name="sd_dist_image_card_desc">Inicia o cancela txt2img, img2img y escalado con plantillas solo de imagen.</string>
-    <string name="sd_dist_video_card_title">Generacion de video</string>
-    <string name="sd_dist_video_card_desc">Inicia o cancela txt2vid e img2vid con plantillas solo de video.</string>
     <string name="sd_dist_image_progress_title">Ejecucion distribuida de imagen</string>
-    <string name="sd_dist_video_progress_title">Ejecucion distribuida de video</string>
-    <string name="sd_dist_progress_percent">%1$d%%</string>
-    <string name="sd_dist_progress_steps">Paso %1$d / %2$d</string>
-    <string name="sd_dist_progress_steps_unknown">Pasos pendientes</string>
-    <string name="sd_dist_progress_eta">ETA %1$s</string>
-    <string name="sd_dist_progress_eta_calculating">calculando</string>
     <string name="sd_manual_flags_label">Flags manuales del comando</string>
     <string name="sd_manual_flags_desc">Añade flags extra de stable-diffusion.cpp solo a esta ejecucion. Los ajustes estructurados de la tarjeta se mantienen separados.</string>
     <string name="sd_manual_flags_hint">Ejemplo: --preview-interval 2 --metadata brief</string>
-    <string name="sd_dist_image_mode">Workflow de imagen</string>
-    <string name="sd_dist_video_mode">Workflow de video</string>
-    <string name="sd_dist_image_model">Modelo de imagen</string>
-    <string name="sd_dist_upscaler_model">Modelo escalador</string>
-    <string name="sd_dist_video_model">Modelo de video</string>
     <string name="sd_dist_select_model">Seleccionar modelo</string>
     <string name="sd_dist_no_models_available">No hay modelos compatibles instalados.</string>
     <string name="sd_dist_input_image_path">Ruta de imagen de entrada</string>
@@ -8356,8 +8242,6 @@
     <string name="dist_speculative_mode_dspark">DSpark</string>
     <string name="dist_speculative_dspark_hint">Usa el modelo borrador seleccionado con la decodificación especulativa draft-dspark de llama.cpp.</string>
     <string name="dist_fit_invalid">El objetivo de ajuste o la división de tensores no coincide con el orden de dispositivos habilitados.</string>
-    <string name="dist_fit_title">Ajuste de memoria y orden de dispositivos</string>
-    <string name="dist_fit_desc">Reserva RAM libre por dispositivo de llama.cpp. Un valor se difunde; los valores separados por comas siguen el orden RPC.</string>
     <string name="dist_fit_enable">Activar ajuste de llama.cpp</string>
     <string name="dist_fit_target">Objetivo de RAM libre (MiB)</string>
     <string name="dist_fit_target_hint">Ejemplo: 7168 o 2048,8192</string>
@@ -8376,8 +8260,6 @@
     <string name="llama_server_dspark_unsupported">%1$s no ofrece decodificación especulativa draft-dspark. Selecciona un binario llama-server con soporte DSpark.</string>
     <string name="llama_server_fit_unsupported" tools:ignore="TypographyDashes">%1$s no ofrece ajuste distribuido de llama.cpp (--fit/--fit-target). Selecciona un binario llama-server compatible.</string>
     <string name="llama_local_distributed_args_rejected">Los argumentos RPC, de ajuste y tensor-split no están permitidos en un perfil de servidor local.</string>
-    <string name="dist_memory_card_desc">Elige cuánta RAM queda disponible para el maestro mientras los workers cargan el modelo objetivo.</string>
-    <string name="dist_model_settings_desc">Tiempo de ejecución, caché KV, muestreo, decodificación especulativa, herramientas y plantillas de este perfil distribuido.</string>
     <string name="sd_component_placement_title">Ubicación de componentes</string>
     <string name="sd_component_placement_te">Codificador de texto</string>
     <string name="sd_component_placement_diffusion">Difusión</string>
@@ -8388,22 +8270,9 @@
     <string name="sd_stage_conditioning_label">Acondicionamiento</string>
     <string name="sd_stage_sampling_label">Muestreo</string>
     <string name="sd_stage_decoding_label">Decodificación</string>
-    <string name="sd_gallery_image_details">%1$s • %2$d×%3$d • %4$d pasos • %5$s</string>
-    <string name="sd_gallery_image_runtime">%1$s • cuantización: %2$s</string>
-    <string name="sd_gallery_image_components">Decodificador: %1$s; caché: %2$s; convolución directa: difusión=%3$b, VAE=%4$b</string>
-    <string name="sd_gallery_default">predeterminado</string>
-    <string name="sd_gallery_unavailable">No disponible</string>
     <string name="title_feature_media_i8mm">Stable Diffusion I8MM</string>
     <string name="title_feature_media_snapdragon_opencl">Stable Diffusion OpenCL para Adreno</string>
-    <string name="dist_step_model_endpoint">1 · Modelo y punto de acceso</string>
-    <string name="dist_step_workers">2 · Trabajadores</string>
-    <string name="dist_step_workers_desc">Elige los dispositivos RPC disponibles para esta ejecución. Nunca se contacta con los trabajadores desactivados.</string>
-    <string name="dist_step_main_placement">3 · Ubicación del modelo principal</string>
-    <string name="dist_step_main_placement_desc">Mantén el modelo en un trabajador o divídelo entre los trabajadores seleccionados.</string>
-    <string name="dist_step_speculative">4 · Decodificación especulativa y MTP</string>
     <string name="dist_step_mmproj">5 · Proyector de visión</string>
-    <string name="dist_step_mmproj_desc">Opcional para modelos de visión. llama.cpp admite actualmente descarga local a CPU o acelerador, no ubicación RPC explícita.</string>
-    <string name="dist_step_runtime">6 · Ejecución y memoria</string>
     <string name="dist_step_review">7 · Revisar e iniciar</string>
     <string name="dist_master_server_port">Puerto del servidor maestro</string>
     <string name="dist_master_server_port_hint">Usa un puerto diferente al del servidor llama.cpp local.</string>
@@ -8413,7 +8282,6 @@
     <string name="dist_placement_resident">Un dispositivo</string>
     <string name="dist_choose_resident_device">Dispositivo residente</string>
     <string name="dist_draft_choose_workers">Trabajadores que alojan el modelo borrador/MTP (equilibrado automático)</string>
-    <string name="dist_mmproj_rpc_unsupported">No se ofrece ubicación RPC del proyector porque llama.cpp no tiene un argumento oficial de dispositivo o división para mmproj.</string>
     <string name="dist_master_cpu">CPU del maestro</string>
     <string name="net_status_failed">FALLO</string>
     <string name="net_status_connecting">CONECTANDO</string>
@@ -9240,4 +9108,49 @@
     <string name="tama_farm_weather_windy">Ventoso</string>
     <string name="tama_farm_weather_rain">Lluvia · riego</string>
     <string name="tama_farm_weather_night">Noche despejada</string>
+    <string name="embchooser_dialog_title">Elige un modelo de embeddings</string>
+    <string name="embchooser_explainer">Los documentos se dividen en fragmentos y un modelo de embeddings los convierte en números para que el asistente encuentre las partes relevantes. Aún no hay ningún modelo de embeddings seleccionado. Elige uno que ya tengas o descarga uno recomendado (requiere internet).</string>
+    <string name="embchooser_use">Usar este</string>
+    <string name="embchooser_in_use">En uso</string>
+    <string name="embchooser_download">Descargar</string>
+    <string name="embchooser_downloading">Descargando… %1$d%%</string>
+    <string name="embchooser_recommended">Recomendado</string>
+    <string name="embchooser_open_models">Abrir gestor de modelos</string>
+    <string name="embchooser_close">Cerrar</string>
+    <string name="embchooser_reindex_note">Una descarga terminada se convierte automáticamente en tu modelo de embeddings si no hay ninguno. Cambiar de modelo después obliga a reindexar los documentos existentes.</string>
+
+    <!-- Servicio de entrenamiento Branchy -->
+    <string name="branchy_notification_channel_name">Entrenamiento Branchy</string>
+    <string name="branchy_notification_title_generic">Entrenamiento Branchy</string>
+    <string name="branchy_notification_title">Branchy: %1$s</string>
+    <string name="branchy_notification_tokenizer">Entrenando el tokenizador…</string>
+    <string name="branchy_notification_prepare">Preparando datos %1$s: %2$d%%</string>
+    <string name="branchy_notification_training_start">Iniciando el entrenamiento…</string>
+    <string name="branchy_notification_training">Etapa %1$s · paso %2$s / %3$s · pérdida %4$s · ETA %5$s</string>
+    <string name="branchy_notification_pausing">Pausando y guardando un punto de control…</string>
+    <string name="branchy_notification_paused">En pausa (%1$s)</string>
+    <string name="branchy_notification_done">Entrenamiento terminado</string>
+    <string name="branchy_notification_failed">El entrenamiento falló: %1$s</string>
+    <string name="branchy_action_pause">Pausar</string>
+    <string name="branchy_action_resume">Reanudar</string>
+    <string name="branchy_action_stop">Detener</string>
+    <string name="branchy_pause_reason_user">pausado por ti</string>
+    <string name="branchy_pause_reason_battery_low">batería baja</string>
+    <string name="branchy_pause_reason_unplugged">desconectado del cargador</string>
+    <string name="branchy_pause_reason_hot">batería demasiado caliente</string>
+    <string name="branchy_pause_reason_restored">la app se reinició</string>
+    <string name="branchy_error_run_missing">La ejecución de entrenamiento ya no existe.</string>
+    <string name="branchy_error_config_invalid">No se puede leer la configuración de la ejecución.</string>
+    <string name="branchy_error_binary_missing">No se encontró el binario de entrenamiento de Branchy.</string>
+    <string name="branchy_error_plan_does_not_fit">El plan no cabe en este dispositivo.</string>
+    <string name="branchy_error_dataset_missing">No se encontró el conjunto de datos %1$s.</string>
+    <string name="branchy_error_dataset_not_ready">El conjunto de datos %1$s aún no está descargado.</string>
+    <string name="branchy_error_no_data">Esta etapa no tiene datos de entrenamiento.</string>
+    <string name="branchy_error_native">El entrenador terminó con el código %1$d.</string>
+    <string name="branchy_stage_pretrain">Preentrenamiento</string>
+    <string name="branchy_stage_sft">Ajuste fino de chat y herramientas</string>
+    <string name="branchy_recipe_30m_title">Mini asistente 30M</string>
+    <string name="branchy_recipe_30m_desc">Un modelo branchy diminuto (unos 30M de parámetros) para chat y llamadas a herramientas. Preentrena con unos 255M de tokens de texto general, código y cuentos, y luego se ajusta con unos 45M de tokens de chat, herramientas, código y español.</string>
+    <string name="branchy_recipe_120m_title">Mini asistente 120M</string>
+    <string name="branchy_recipe_120m_desc">Un modelo branchy pequeño (unos 120M de parámetros) para chat y llamadas a herramientas. Preentrena con cerca de 1B de tokens de texto general, código y cuentos, y luego se ajusta con unos 180M de tokens de chat, herramientas, código y español. Necesita varios días en un teléfono.</string>
 </resources>

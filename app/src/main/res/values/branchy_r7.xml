@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="branchy_r7_step_mode_exact">Exact steps — same result as one device</string>
+    <string name="branchy_r7_step_mode_local">Local rounds — faster on slow links</string>
+    <string name="branchy_r7_step_mode_reason">%1$s (%2$s)</string>
+    <string name="branchy_r7_step_mode_comm">network: %1$d%% of each step</string>
+</resources>

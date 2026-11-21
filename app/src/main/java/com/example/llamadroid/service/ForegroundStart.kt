@@ -81,6 +81,7 @@ object ForegroundStart {
         val types = effectiveTypes(requestedTypes, sdk, micGranted, declared)
         if (types == 0) {
             val reason = if (needsMic && !micGranted) Reason.MICROPHONE_PERMISSION else Reason.INVALID_TYPE
+            satisfyAndStop(service, notification)
             return Result.Failed(reason)
         }
         return try {
@@ -121,8 +122,86 @@ object ForegroundStart {
                     DebugLog.log("ForegroundStart: $serviceName dataSync retry failed: ${describe(retryError)}")
                 }
             }
+            satisfyAndStop(service, notification)
             Result.Failed(reason, error)
         }
+    }
+
+    private const val PLACEHOLDER_NOTIFICATION_ID = 0x7F0F_5701
+
+    /**
+     * Pure choice of placeholder foreground types, safest first, limited to what the manifest entry
+     * declares ([declaredTypes] null/0 means unknown: only the type-less form is tried, signalled
+     * by a 0 entry). specialUse is only used from API 34.
+     */
+    internal fun placeholderTypes(sdkInt: Int, declaredTypes: Int?): List<Int> {
+        if (sdkInt < Build.VERSION_CODES.Q || declaredTypes == null || declaredTypes == 0) return listOf(0)
+        val order = buildList {
+            if (sdkInt >= 34) add(ForegroundServiceTypes.SPECIAL_USE)
+            add(ForegroundServiceTypes.DATA_SYNC)
+            add(ForegroundServiceTypes.MEDIA_PLAYBACK)
+            if (sdkInt < 34) add(ForegroundServiceTypes.SPECIAL_USE)
+        }
+        return order.filter { declaredTypes and it != 0 }.ifEmpty { listOf(0) }
+    }
+
+    /**
+     * Satisfies the `startForegroundService()` contract after a rejected start: Android kills the
+     * app (ForegroundServiceDidNotStartInTimeException) if the service stops without ever calling
+     * startForeground. Posts a minimal placeholder with the safest declared type, then removes it.
+     * Never throws. Returns true when a placeholder start succeeded.
+     */
+    fun satisfyAndStop(service: Service, original: Notification? = null): Boolean {
+        val channelId = original?.channelId ?: return satisfyWithFallbackChannel(service)
+        return satisfy(service, channelId)
+    }
+
+    private fun satisfyWithFallbackChannel(service: Service): Boolean = try {
+        val manager = service.getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
+        val id = "fgs_placeholder"
+        if (manager.getNotificationChannel(id) == null) {
+            // The channel name is visible in system notification settings, so use the localized app name.
+            manager.createNotificationChannel(
+                android.app.NotificationChannel(id, service.getString(R.string.app_name), android.app.NotificationManager.IMPORTANCE_MIN)
+            )
+        }
+        satisfy(service, id)
+    } catch (error: Exception) {
+        DebugLog.log("ForegroundStart: placeholder channel failed: ${describe(error)}")
+        false
+    }
+
+    private fun satisfy(service: Service, channelId: String): Boolean {
+        val name = service.javaClass.simpleName
+        val placeholder = try {
+            androidx.core.app.NotificationCompat.Builder(service, channelId)
+                .setSmallIcon(R.drawable.ic_launcher_foreground)
+                .setContentTitle(service.getString(R.string.app_name))
+                .setPriority(androidx.core.app.NotificationCompat.PRIORITY_MIN)
+                .setOngoing(true)
+                .build()
+        } catch (error: Exception) {
+            DebugLog.log("ForegroundStart: $name placeholder build failed: ${describe(error)}")
+            return false
+        }
+        for (type in placeholderTypes(Build.VERSION.SDK_INT, declaredTypes(service))) {
+            try {
+                if (type == 0) {
+                    service.startForeground(PLACEHOLDER_NOTIFICATION_ID, placeholder)
+                } else {
+                    ServiceCompat.startForeground(service, PLACEHOLDER_NOTIFICATION_ID, placeholder, type)
+                }
+                try {
+                    ServiceCompat.stopForeground(service, ServiceCompat.STOP_FOREGROUND_REMOVE)
+                } catch (error: Exception) {
+                    DebugLog.log("ForegroundStart: $name placeholder stop failed: ${describe(error)}")
+                }
+                return true
+            } catch (error: Exception) {
+                DebugLog.log("ForegroundStart: $name placeholder(type=$type) failed: ${describe(error)}")
+            }
+        }
+        return false
     }
 
     private fun describe(error: Throwable): String =
@@ -157,7 +236,10 @@ object ForegroundStart {
     fun startRequiringMicrophone(service: Service, id: Int, notification: Notification, requestedTypes: Int): Result {
         val micGranted = ContextCompat.checkSelfPermission(service, Manifest.permission.RECORD_AUDIO) ==
             PackageManager.PERMISSION_GRANTED
-        if (!micGranted) return Result.Failed(Reason.MICROPHONE_PERMISSION)
+        if (!micGranted) {
+            satisfyAndStop(service)
+            return Result.Failed(Reason.MICROPHONE_PERMISSION)
+        }
         return start(service, id, notification, requestedTypes or ForegroundServiceTypes.MICROPHONE)
     }
 

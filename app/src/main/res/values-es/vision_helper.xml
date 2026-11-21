@@ -13,5 +13,7 @@
     <string name="vision_helper_thinking">Dejar que el modelo de visión piense (más lento)</string>
     <string name="vision_helper_ram_note">Un servidor temporal de bajo impacto se inicia solo cuando hay suficiente RAM libre, describe todas las imágenes pendientes de una vez y se detiene de nuevo.</string>
     <string name="vision_helper_status_waiting_ram">Asistente de visión esperando RAM libre</string>
-    <string name="vision_helper_status_describing">Describiendo imagen…</string>
+    <string name="vision_helper_status_starting">Iniciando el asistente de visión (puede tardar un minuto)…</string>
+    <string name="vision_helper_status_describing">Describiendo la imagen %1$s/%2$s con el asistente de visión…</string>
+    <string name="vision_helper_status_describing_partial">Describiendo la imagen %1$s/%2$s con el asistente de visión… “%3$s”</string>
 </resources>

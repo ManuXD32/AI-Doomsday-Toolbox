@@ -172,6 +172,7 @@ fun KnowledgeBaseScreen(navController: NavController) {
     var busyMessage by remember { mutableStateOf<String?>(null) }
     var showNoteImport by remember { mutableStateOf(false) }
     var showUrlImport by remember { mutableStateOf(false) }
+    var showNoEmbeddingDialog by remember { mutableStateOf(false) }
     var importUrl by remember { mutableStateOf("") }
     var showDiagnostics by remember { mutableStateOf(false) }
     var basePendingDelete by remember { mutableStateOf<KnowledgeBaseEntity?>(null) }
@@ -459,7 +460,7 @@ fun KnowledgeBaseScreen(navController: NavController) {
                             base = selectedBase,
                             canImport = embeddingConfig.isConfigured,
                             canResume = sources.any { canContinueSource(it, embeddingConfig.hash) },
-                            onUpload = { filePicker.launch(arrayOf("application/pdf", "text/plain", "text/markdown", "text/*")) },
+                            onUpload = { if (!embeddingConfig.isConfigured) showNoEmbeddingDialog = true else filePicker.launch(arrayOf("application/pdf", "text/plain", "text/markdown", "text/*", *com.example.llamadroid.knowledge.DocumentTextExtractor.pickerMimeTypes.toTypedArray())) },
                             onAddUrl = { showUrlImport = true },
                             onImportNotes = { showNoteImport = !showNoteImport },
                             onResume = { KnowledgeBaseIndexingService.enqueueResumeBase(context, selectedBase.id) },
@@ -569,6 +570,17 @@ fun KnowledgeBaseScreen(navController: NavController) {
     }
 
     val baseForUrlImport = selectedBase
+    if (showNoEmbeddingDialog) {
+        NoEmbeddingModelDialog(
+            onDismiss = { showNoEmbeddingDialog = false },
+            onConfigured = { showNoEmbeddingDialog = false; markStaleSoon() },
+            onOpenModelManager = {
+                showNoEmbeddingDialog = false
+                navController.navigate(com.example.llamadroid.ui.navigation.Screen.LLMModels.route)
+            }
+        )
+    }
+
     if (showUrlImport && baseForUrlImport != null) {
         AlertDialog(
             onDismissRequest = { showUrlImport = false },
@@ -1362,7 +1374,7 @@ private fun FolderActionsCard(
                 }
             }
             Column(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                Button(onClick = onUpload, enabled = canImport, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) {
+                Button(onClick = onUpload, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) {
                     Icon(Icons.Default.UploadFile, contentDescription = null)
                     Spacer(Modifier.width(8.dp))
                     Text(stringResource(R.string.kb_upload_documents), maxLines = 1, overflow = TextOverflow.Ellipsis)

@@ -80,6 +80,15 @@ object WebViewHolder {
                     loadingCallbacks[url]?.invoke(false)
                 }
                 
+                override fun onRenderProcessGone(view: WebView?, detail: android.webkit.RenderProcessGoneDetail?): Boolean {
+                    // The renderer is dead: drop the cached view so the next open builds a fresh one,
+                    // and surface the error state instead of letting the app process be killed.
+                    if (webViews[url] === view) webViews.remove(url)
+                    loadingCallbacks[url]?.invoke(false)
+                    errorCallbacks[url]?.invoke("Renderer process gone")
+                    return true
+                }
+
                 override fun onReceivedError(
                     view: WebView?,
                     request: WebResourceRequest?,

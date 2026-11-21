@@ -242,7 +242,7 @@ object GuideShotCatalog {
         "distributed_llm" to GuideEntry("distributed_network", { app, _, _ -> DistributedFixtures.seedLlm(app) }),
         "distributed_media" to GuideEntry("sd_distributed_network", { app, _, _ -> DistributedFixtures.seedMedia(app) }),
         "benchmark" to GuideEntry("benchmark", all(allModels, { app, _, _ -> GuideFixtures.benchmark(app) })),
-        "quadtrix" to GuideEntry("quadtrix_trainer", substitute = true),
+        "quadtrix" to GuideEntry("training_hub", substitute = true),
         "termux" to GuideEntry("termux", substitute = true),
         "ollama" to GuideEntry("ollama_manager", { app, _, _ -> GuideFixtures.ollamaServer(app) }),
         "file_server" to GuideEntry("file_server", fileStation),

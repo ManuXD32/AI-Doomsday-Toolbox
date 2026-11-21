@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="model_lineage_section_title">Entrenados y cuantizados (%1$d)</string>
+    <string name="model_lineage_family_original">Original: %1$s</string>
+    <string name="model_lineage_origin_branchy">Exportación entrenada</string>
+    <string name="model_lineage_origin_quantized">Cuantizado</string>
+</resources>

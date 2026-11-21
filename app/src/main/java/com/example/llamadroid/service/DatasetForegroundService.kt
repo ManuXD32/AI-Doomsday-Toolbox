@@ -61,12 +61,29 @@ class DatasetForegroundService : Service(), DatasetProcessor.RuntimeHooks {
         val jobQueue = DatasetProcessor.jobQueue
         val activeJob = DatasetProcessor.activeJob
 
+        /**
+         * Starts the service, tolerating background-start denial (API 31+
+         * ForegroundServiceStartNotAllowedException) and IllegalStateException. The persisted job
+         * stays recoverable. Returns false when Android refused.
+         */
+        private fun startGuarded(context: Context, intent: Intent): Boolean = try {
+            ContextCompat.startForegroundService(context, intent)
+            true
+        } catch (error: Exception) {
+            if (error is IllegalStateException || error.javaClass.simpleName == "ForegroundServiceStartNotAllowedException") {
+                DebugLog.log("DatasetForegroundService: start refused: ${error.javaClass.simpleName}: ${error.message}")
+                false
+            } else {
+                throw error
+            }
+        }
+
         fun enqueue(context: Context, job: DatasetProcessor.Job) {
             val intent = Intent(context.applicationContext, DatasetForegroundService::class.java).apply {
                 action = ACTION_ENQUEUE
                 putExtra(EXTRA_JOB_JSON, job.toPersistedDatasetJob().toJson().toString())
             }
-            ContextCompat.startForegroundService(context.applicationContext, intent)
+            startGuarded(context.applicationContext, intent)
         }
 
         fun enqueueBatch(context: Context, jobs: List<DatasetProcessor.Job>) {
@@ -78,7 +95,7 @@ class DatasetForegroundService : Service(), DatasetProcessor.RuntimeHooks {
                 action = ACTION_ENQUEUE_BATCH
                 putExtra(EXTRA_JOBS_JSON, jobsJson.toString())
             }
-            ContextCompat.startForegroundService(context.applicationContext, intent)
+            startGuarded(context.applicationContext, intent)
         }
 
         fun cancelCurrent(context: Context) {
@@ -156,7 +173,11 @@ class DatasetForegroundService : Service(), DatasetProcessor.RuntimeHooks {
                 val intent = Intent(appContext, DatasetForegroundService::class.java).apply {
                     action = ACTION_REQUEST_RESUME
                 }
-                ContextCompat.startForegroundService(appContext, intent)
+                if (!startGuarded(appContext, intent)) {
+                    // Leave the job recoverable: a later foreground launch can resume it.
+                    resumeRequested.set(false)
+                    return@launch
+                }
                 recordBreadcrumb(
                     event = "resume_dispatched",
                     phase = ACTION_REQUEST_RESUME,
@@ -722,6 +743,9 @@ class DatasetForegroundService : Service(), DatasetProcessor.RuntimeHooks {
             stopRuntimeService()
             return
         }
+        // Never stop a service that was started with startForegroundService() before it called
+        // startForeground(): Android kills the app for that.
+        ForegroundStart.satisfyAndStop(this@DatasetForegroundService)
         stopSelf()
     }
 
@@ -731,6 +755,8 @@ class DatasetForegroundService : Service(), DatasetProcessor.RuntimeHooks {
         isRunning = false
         if (wasForeground) {
             stopForeground(STOP_FOREGROUND_REMOVE)
+        } else {
+            ForegroundStart.satisfyAndStop(this@DatasetForegroundService)
         }
         runCatching {
             NotificationManagerCompat.from(this).cancel(NOTIFICATION_ID)

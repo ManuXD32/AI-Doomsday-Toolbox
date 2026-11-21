@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="branchy_r5_next_plan_stale">Los ajustes cambiaron desde que se calculó el plan. Recalcula el plan para continuar.</string>
+    <string name="branchy_r5_plan_recalculate">Recalcular</string>
+    <string name="branchy_r5_plan_stale_note">Los ajustes cambiaron desde que se calculó este plan. Recalcúlalo antes de continuar.</string>
+    <string name="branchy_r5_epochs_title">Duración del entrenamiento</string>
+    <string name="branchy_r5_epochs_hint">Pasadas sobre los datos seleccionados (0,1 a 100). El entrenamiento se detiene al llegar a esas épocas o al objetivo de tokens por defecto, lo que ocurra primero.</string>
+    <string name="branchy_r5_epochs_label">Épocas</string>
+    <string name="branchy_r5_epochs_tokens">Datos: %1$s tokens (estimados por el tamaño del archivo cuando hace falta). Objetivo de tokens: %2$s.</string>
+    <string name="branchy_r5_epochs_result">%1$s pasos, tiempo estimado %2$s</string>
+    <string name="branchy_r5_eta_warning">Entrenamiento largo: unas %1$s.</string>
+    <string name="branchy_r5_eta_suggestions">Para acortarlo: usa menos épocas, elige un modelo más pequeño o añade más dispositivos.</string>
+</resources>

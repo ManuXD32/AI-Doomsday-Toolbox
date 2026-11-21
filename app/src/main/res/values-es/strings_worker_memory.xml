@@ -4,7 +4,5 @@
     <string name="dist_worker_memory_unavailable">No hay memoria suficiente para iniciar un worker. Su contribución debe ser de al menos %1$d MB.</string>
     <string name="dist_worker_memory_total">Memoria total</string>
     <string name="dist_worker_memory_available">Memoria disponible</string>
-    <string name="dist_worker_memory_reserved">Reserva del sistema</string>
-    <string name="dist_worker_memory_contribution">Contribución del worker</string>
     <string name="dist_worker_memory_value">%1$d MB</string>
 </resources>

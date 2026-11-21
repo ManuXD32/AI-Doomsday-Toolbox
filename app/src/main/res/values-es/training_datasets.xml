@@ -1,0 +1,104 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Hub de entrenamiento -->
+    <string name="training_title">Entrenamiento</string>
+    <string name="training_hub_desc">Entrena modelos de lenguaje: Quadtrix, Branchy y datasets de entrenamiento</string>
+    <string name="training_hub_subtitle">Entrena modelos de lenguaje pequeños en tus propios dispositivos</string>
+    <string name="training_hub_quadtrix_title">Quadtrix</string>
+    <string name="training_hub_quadtrix_desc">Entrena y sirve LLM nativos del teléfono con la WebUI y los workers de Quadtrix.</string>
+    <string name="training_hub_branchy_title">Branchy</string>
+    <string name="training_hub_branchy_desc">Modelos ramificados entrenados desde cero entre varios dispositivos y exportados como GGUF Q8 o Q4.</string>
+    <string name="training_hub_datasets_title">Biblioteca de datasets</string>
+    <string name="training_hub_datasets_desc">Descarga, importa y gestiona los datasets usados para entrenar.</string>
+
+    <!-- Biblioteca de datasets -->
+    <string name="dataset_library_title">Biblioteca de datasets</string>
+    <string name="dataset_library_subtitle">Datasets de entrenamiento compartidos por todos los entrenadores</string>
+    <string name="dataset_tab_mine">Mis datasets</string>
+    <string name="dataset_tab_catalog">Catálogo</string>
+    <string name="dataset_tab_hf">Hugging Face</string>
+    <string name="dataset_empty_title">Aún no hay datasets</string>
+    <string name="dataset_empty_body">Añade uno del catálogo, busca en Hugging Face o importa un archivo.</string>
+    <string name="dataset_lib_status_pending">Pendiente</string>
+    <string name="dataset_status_downloading">Descargando</string>
+    <string name="dataset_status_ready">Listo</string>
+    <string name="dataset_status_failed">Con error</string>
+    <string name="dataset_source_curated">Catálogo</string>
+    <string name="dataset_source_hf">Hugging Face</string>
+    <string name="dataset_source_file">Importado</string>
+    <string name="dataset_chip_nc">No comercial</string>
+    <string name="dataset_chip_gated">Con acceso restringido</string>
+    <string name="dataset_licence_unknown">Licencia desconocida</string>
+    <string name="dataset_nc_hint">Términos no comerciales o restringidos. Revisa la licencia antes de usar comercialmente un modelo entrenado con él.</string>
+    <string name="dataset_gated_hint">Requiere aceptar los términos en Hugging Face y un token de acceso.</string>
+    <string name="dataset_meta_format">%1$s · unas %2$s filas</string>
+    <string name="dataset_lib_delete_title">¿Eliminar dataset?</string>
+    <string name="dataset_delete_body">¿Eliminar %1$s y sus archivos de este dispositivo?</string>
+    <string name="dataset_added_notice">Añadido: %1$s</string>
+    <string name="dataset_add_failed">No se pudo añadir el dataset: %1$s</string>
+
+    <!-- Catálogo -->
+    <string name="dataset_group_chat">Chat</string>
+    <string name="dataset_group_general">Conocimiento general</string>
+    <string name="dataset_group_coding">Programación</string>
+    <string name="dataset_group_tool_use">Uso de herramientas</string>
+    <string name="dataset_group_stories">Cuentos</string>
+    <string name="dataset_group_spanish">Español</string>
+    <string name="dataset_catalog_add">Añadir</string>
+    <string name="dataset_catalog_added">Añadido</string>
+    <string name="dataset_cap_label">Datos leídos al preparar</string>
+    <string name="dataset_cap_all">Todo</string>
+
+    <!-- Búsqueda en Hugging Face -->
+    <string name="dataset_hf_search_label">Buscar datasets en Hugging Face</string>
+    <string name="dataset_hf_search_hint">Escribe al menos 2 caracteres</string>
+    <string name="dataset_hf_no_results">No se encontraron datasets.</string>
+    <string name="dataset_hf_error">La solicitud falló: %1$s</string>
+    <string name="dataset_hf_stats">%1$s descargas · %2$s me gusta</string>
+    <string name="dataset_hf_loading">Cargando detalles del dataset…</string>
+    <string name="dataset_hf_no_files">No se encontraron archivos de datos compatibles (jsonl, json, parquet, csv, txt).</string>
+    <string name="dataset_hf_source_repo">Archivos del repositorio</string>
+    <string name="dataset_hf_source_parquet">Parquet convertido</string>
+    <string name="dataset_hf_files_title">Archivos de datos</string>
+    <string name="dataset_hf_config">Configuración</string>
+    <string name="dataset_hf_split">Partición</string>
+    <string name="dataset_hf_selected_summary">%1$s de %2$s archivos seleccionados · %3$s</string>
+    <string name="dataset_hf_add">Añadir dataset</string>
+    <string name="dataset_lib_name_label">Nombre</string>
+
+    <!-- Formato y mapeo de columnas -->
+    <string name="dataset_format_label">Formato</string>
+    <string name="dataset_format_auto">Detección automática</string>
+    <string name="dataset_format_chat">Chat</string>
+    <string name="dataset_format_instruction">Instrucciones</string>
+    <string name="dataset_format_text">Texto plano</string>
+    <string name="dataset_columns_label">Mapeo de columnas</string>
+    <string name="dataset_columns_auto_hint">La detección automática lee las columnas por sí sola; no hace falta mapeo.</string>
+    <string name="dataset_col_messages">Columna de mensajes</string>
+    <string name="dataset_col_role">Clave de rol</string>
+    <string name="dataset_col_content">Clave de contenido</string>
+    <string name="dataset_col_instruction">Columna de instrucción</string>
+    <string name="dataset_col_input">Columna de entrada</string>
+    <string name="dataset_col_output">Columna de salida</string>
+    <string name="dataset_col_text">Columna de texto</string>
+
+    <!-- Importar archivo -->
+    <string name="dataset_import_button">Importar desde archivo</string>
+    <string name="dataset_import_title">Importar dataset</string>
+    <string name="dataset_import_file">Archivo: %1$s</string>
+    <string name="dataset_import_unsupported">Tipo de archivo no compatible. Usa jsonl, json, parquet, csv o txt.</string>
+    <string name="dataset_import_confirm">Importar</string>
+    <string name="dataset_import_progress">Importando %1$s…</string>
+    <string name="dataset_import_done">Importado: %1$s</string>
+    <string name="dataset_import_failed">Falló la importación: %1$s</string>
+
+    <!-- Selector usado por los entrenadores -->
+    <string name="dataset_pick_from_library">Elegir de la biblioteca de datasets</string>
+    <string name="dataset_pick_title">Elige un archivo de datos</string>
+    <string name="dataset_pick_empty">Aún no hay datasets listos. Añade uno en la biblioteca de datasets.</string>
+    <string name="dataset_pick_open_library">Abrir biblioteca de datasets</string>
+    <string name="dataset_pick_current">Archivo de datos</string>
+    <string name="dataset_pick_none">Ningún archivo de datos seleccionado</string>
+    <string name="dataset_quadtrix_card_title">Datos de entrenamiento</string>
+    <string name="dataset_quadtrix_card_desc">El archivo de datos con el que entrena Quadtrix. Elige uno que hayas descargado o importado en la biblioteca de datasets.</string>
+</resources>

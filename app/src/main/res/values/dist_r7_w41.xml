@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="sd_helper_lost_error">Helper %1$s (%2$s) stopped responding, so the run was stopped. Open that device\'s Media worker log to see why.</string>
+</resources>

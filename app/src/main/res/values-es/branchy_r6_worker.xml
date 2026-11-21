@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="branchy_r6w_training_title">Entrenamiento</string>
+    <string name="branchy_r6w_role_dp">Réplica de datos en paralelo</string>
+    <string name="branchy_r6w_role_bp">Propietario de rama</string>
+    <string name="branchy_r6w_run">Ejecución: %1$s</string>
+    <string name="branchy_r6w_round">Ronda %1$d</string>
+    <string name="branchy_r6w_phase">Fase: %1$s</string>
+    <string name="branchy_r6w_phase_compute">Calculando</string>
+    <string name="branchy_r6w_phase_upload">Subiendo</string>
+    <string name="branchy_r6w_phase_wait">Esperando a los demás</string>
+    <string name="branchy_r6w_phase_resting">Descansando</string>
+    <string name="branchy_r6w_micro_dp">Microlotes: %1$d / %2$d</string>
+    <string name="branchy_r6w_left">Restantes en esta ronda: %1$d</string>
+    <string name="branchy_r6w_ms_per_micro">Por microlote: %1$d ms</string>
+    <string name="branchy_r6w_eta">Tiempo estimado: %1$s</string>
+    <string name="branchy_r6w_micro_bp">Paso %1$d, microlote: %2$d / %3$d</string>
+    <string name="branchy_r6w_fwd_bwd">Adelante: %1$d ms, atrás: %2$d ms</string>
+    <string name="branchy_r6w_storage_title">Almacenamiento del trabajador</string>
+    <string name="branchy_r6w_storage_total">Total: %1$s</string>
+    <string name="branchy_r6w_storage_dp_data">Datos de paralelismo de datos</string>
+    <string name="branchy_r6w_storage_kind_shards">Fragmentos</string>
+    <string name="branchy_r6w_storage_kind_dp">Datos de paralelismo de datos</string>
+    <string name="branchy_r6w_storage_kind_slice">Porción de inferencia</string>
+    <string name="branchy_r6w_storage_row">%1$s - %2$s - último uso %3$s</string>
+    <string name="branchy_r6w_storage_delete">Eliminar</string>
+    <string name="branchy_r6w_storage_delete_all">Eliminar todo</string>
+    <string name="branchy_r6w_storage_running_reason">Detén el trabajador para eliminar sus datos.</string>
+    <string name="branchy_r6w_storage_delete_failed">No se pudieron eliminar algunos datos.</string>
+    <string name="branchy_r6w_storage_confirm_title">¿Eliminar estos datos?</string>
+    <string name="branchy_r6w_storage_confirm_one">%1$s se eliminará de este trabajador. El maestro puede enviarlo de nuevo cuando haga falta.</string>
+    <string name="branchy_r6w_storage_confirm_all">Se eliminarán todos los datos del trabajador (%1$s). El maestro puede enviarlos de nuevo cuando haga falta.</string>
+</resources>

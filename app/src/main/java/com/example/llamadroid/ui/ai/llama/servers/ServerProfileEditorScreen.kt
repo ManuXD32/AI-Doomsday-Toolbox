@@ -128,6 +128,8 @@ fun ServerProfileEditorScreen(navController: NavController, cardId: Long, modelP
     var saving by remember { mutableStateOf(false) }
     var errors by remember { mutableStateOf<Set<ProfileEditorError>>(emptySet()) }
     var saveError by remember { mutableStateOf<String?>(null) }
+    // Set when an existing server's stored profile could not be read; the form then shows defaults, so Save is blocked.
+    var profileMissing by rememberSaveable { mutableStateOf(false) }
     var showDiscard by remember { mutableStateOf(false) }
 
     fun metaOf() = "$name|$portText|$allowWear|" +
@@ -145,11 +147,18 @@ fun ServerProfileEditorScreen(navController: NavController, cardId: Long, modelP
             portText = seed.port.toString()
             allowWear = seed.allowWearStart
         } else {
-            // New server (or a card whose preset vanished): start from the user's current LLM settings.
-            var base = LlamaServerLaunchProfile.capture(SettingsRepository(context))
+            // New server: start from the user's current LLM settings. A saved server whose preset
+            // vanished must not silently show the global settings as if they were its own values.
+            var base = if (isEdit) LlamaServerLaunchProfile()
+            else LlamaServerLaunchProfile.capture(SettingsRepository(context))
             if (!modelPath.isNullOrBlank()) base = viewModel.profileForModelPath(base, modelPath)
             profile = base
-            if (isEdit) servers.firstOrNull { it.cardId == cardId }?.let { name = it.name; portText = it.port.toString() }
+            if (isEdit) {
+                // Saving the placeholder defaults (8K context, no projector) over the real server was
+                // the "Save resets my options" symptom, so refuse to save until the server is recreated.
+                profileMissing = true
+                servers.firstOrNull { it.cardId == cardId }?.let { name = it.name; portText = it.port.toString() }
+            }
         }
         toolDefaultsJson = withContext(Dispatchers.IO) {
             if (isEdit) viewModel.loadManagedToolDefaults(cardId) else normalizedManagedToolDefaults(null)
@@ -181,7 +190,7 @@ fun ServerProfileEditorScreen(navController: NavController, cardId: Long, modelP
     }
 
     fun save(restart: Boolean) {
-        if (saving || !seeded) return
+        if (saving || !seeded || profileMissing) return
         val captured = LlamaServerLaunchProfile.capture(draft)
         val found = validateProfileEditor(
             captured, portText, usedPorts, viewModel::fileReadable, ::validSavedLlamaArguments
@@ -197,7 +206,7 @@ fun ServerProfileEditorScreen(navController: NavController, cardId: Long, modelP
         scope.launch {
             var createdRowId: Long? = null
             val result = if (isEdit) {
-                viewModel.updateLocal(cardId, profile, finalName, port, allowWear, toolDefaultsToSave)
+                viewModel.updateLocal(cardId, profile, finalName, port, allowWear, toolDefaultsToSave, baselineProfile)
             } else {
                 viewModel.createLocal(
                     finalName, profile, port, allowWear, startAfterCreate = restart,
@@ -233,7 +242,7 @@ fun ServerProfileEditorScreen(navController: NavController, cardId: Long, modelP
                 running = running,
                 saving = saving || !seeded,
                 errors = errors,
-                saveError = saveError,
+                saveError = saveError ?: if (profileMissing) stringResource(R.string.spe_profile_missing) else null,
                 onCancel = ::requestExit,
                 onSave = { save(restart = false) },
                 onSaveAndRun = { save(restart = true) }
@@ -276,6 +285,8 @@ fun ServerProfileEditorScreen(navController: NavController, cardId: Long, modelP
                     scope.launch {
                         // Same sensible defaults the old editor applied when a model was picked.
                         val base = viewModel.baseProfileFor(model)
+                        // The GGUF read is slow; drop the defaults if the selection changed meanwhile.
+                        if (draft.selectedModelPath.value != model.path) return@launch
                         draft.setSelectedMmprojPath(base.mmprojPath)
                         draft.setEnableVision(base.visionEnabled)
                         draft.setContextSize(base.contextSize)

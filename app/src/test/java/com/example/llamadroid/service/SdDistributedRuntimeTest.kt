@@ -11,6 +11,26 @@ import org.junit.Test
 class SdDistributedRuntimeTest {
 
     @Test
+    fun `rpc client environment is empty for local runs`() {
+        assertTrue(sdRpcClientEnvironment(SdDistributedRuntimeConfig()).isEmpty())
+        assertTrue(
+            sdRpcClientEnvironment(SdDistributedRuntimeConfig(enabled = true, rpcServers = " ")).isEmpty()
+        )
+        assertTrue(
+            sdRpcClientEnvironment(SdDistributedRuntimeConfig(enabled = false, rpcServers = "10.0.0.2:50052")).isEmpty()
+        )
+    }
+
+    @Test
+    fun `rpc client environment sets hash threshold with helpers`() {
+        val env = sdRpcClientEnvironment(
+            SdDistributedRuntimeConfig(enabled = true, rpcServers = "10.0.0.2:50052")
+        )
+
+        assertEquals("4194304", env["GGML_RPC_HASH_THRESHOLD"])
+    }
+
+    @Test
     fun `disabled config emits no distributed args`() {
         val args = buildSdDistributedPreviewArgs(SdDistributedRuntimeConfig(enabled = false))
 

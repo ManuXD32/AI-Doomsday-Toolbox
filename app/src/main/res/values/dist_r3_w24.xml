@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="dist_r3_helper_unreachable">Can\'t reach %1$s (%2$s).</string>
+    <string name="dist_r3_connect_hint">Both phones must be on the same Wi-Fi or VPN. On a VPN, add the helper by its VPN address.</string>
+    <string name="dist_r3_server_abort">The model server stopped (abort).</string>
+    <string name="dist_r3_server_abort_line">The model server stopped (abort). Last log line: %1$s</string>
+    <string name="dist_r3_test_connection">Test connection</string>
+    <string name="dist_r3_testing">Testing…</string>
+    <string name="dist_r3_probe_ok">Reachable · %1$d ms</string>
+    <string name="dist_r3_probe_fail">Not reachable</string>
+    <string name="dist_r3_log_share">Share log</string>
+    <string name="dist_r3_log_close">Close</string>
+    <string name="dist_r3_topology_layers_label">Assigned layers</string>
+    <string name="dist_r3_topology_status_label">Status details</string>
+</resources>

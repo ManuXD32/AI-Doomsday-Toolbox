@@ -25,7 +25,7 @@ internal fun nativeChatToolAwarenessMessages(
         add(
             OllamaService.ChatMessage(
                 role = "system",
-                content = "A private workspace is available for this saved chat. Use list/read before editing existing files. Keep files focused, write at most one bounded batch per call, then use append_workspace_file, edit_workspace_lines, or apply_workspace_patch. Do not claim access to workspace files outside this chat workspace; files the user attached (listed in [Attached files: ...] lines) are read with chat_file_read."
+                content = "A private workspace is available for this saved chat. To change an existing file, find the spot with search_workspace_file or read_workspace_file (start_line/end_line), then use replace_in_workspace_file or edit_workspace_lines. Never re-output a whole file to fix it. For new files, write at most one bounded batch per call and continue with append_workspace_file. Do not claim access to workspace files outside this chat workspace; files the user attached (listed in [Attached files: ...] lines) are read with chat_file_read."
             )
         )
     }

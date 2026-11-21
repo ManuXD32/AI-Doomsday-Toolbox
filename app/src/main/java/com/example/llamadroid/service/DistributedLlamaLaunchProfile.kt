@@ -21,7 +21,11 @@ data class DistributedLlamaLaunchProfile(
     val speculativePlacement: DistributedSpeculativePlacement,
     val speculativeWorkerIndex: Int? = null,
     val commandTemplate: String? = null,
-    val customCommand: String? = null
+    val customCommand: String? = null,
+    /** Fewest-hops planner warnings (tiny share, fits on master, network bound). Display only. */
+    val planWarnings: List<DistributedPlanWarning> = emptyList(),
+    val estimatedNetworkMsPerToken: Int? = null,
+    val estimatedComputeMsPerToken: Int? = null
 ) {
     init {
         require(config.modelPath.isNotBlank()) { "A model is required" }
@@ -187,8 +191,40 @@ data class DistributedLlamaResolveRequest(
     val draftPlacement: DraftModelPlacement? = null,
     val mmprojPath: String? = null,
     val mmprojPlacement: MmprojPlacement = MmprojPlacement.MASTER_ACCELERATOR,
-    val kvPlacement: DistributedKvPlacement = DistributedKvPlacement()
+    val kvPlacement: DistributedKvPlacement = DistributedKvPlacement(),
+    /** Explicit `--ubatch-size`; always sent to llama-server. */
+    val ubatchSize: Int = DistributedPerf.DEFAULT_UBATCH,
+    val layerPlanning: DistributedLayerPlanning = DistributedLayerPlanning.OPTIMAL_NETWORK,
+    /**
+     * Per-device value (percent or layers, see [layerPlanning]) keyed by [DistributedDeviceRef.stableKey].
+     * Only read for [DistributedLayerPlanning.PERCENT] and [DistributedLayerPlanning.LAYERS].
+     */
+    val manualSplit: Map<String, Int> = emptyMap(),
+    /** Median probe RTT per worker address (`ip:port`) for the network-bound estimate. */
+    val workerRttMs: Map<String, Long> = emptyMap()
 )
+
+enum class DistributedLayerPlanning {
+    /** Master first up to its RAM budget, then the fewest and largest workers (formerly FEWEST_HOPS). */
+    OPTIMAL_NETWORK,
+    /** Spread layers across all selected devices proportionally to their RAM (formerly PROPORTIONAL). */
+    RAM_PROPORTIONAL,
+    /** Exact percent of the layers per device. */
+    PERCENT,
+    /** Exact layer count per device. */
+    LAYERS;
+
+    val isManual: Boolean get() = this == PERCENT || this == LAYERS
+
+    companion object {
+        /** Reads a persisted value, including the pre-1.00003 names. Unknown values fall back to the default. */
+        fun fromStored(stored: String?): DistributedLayerPlanning = when (stored) {
+            "FEWEST_HOPS" -> OPTIMAL_NETWORK
+            "PROPORTIONAL" -> RAM_PROPORTIONAL
+            else -> entries.firstOrNull { it.name == stored } ?: OPTIMAL_NETWORK
+        }
+    }
+}
 
 object DistributedLlamaLaunchResolver {
     fun resolve(request: DistributedLlamaResolveRequest): DistributedLlamaLaunchProfile {
@@ -241,9 +277,44 @@ object DistributedLlamaLaunchResolver {
                 DistributedDeviceKind.WORKER -> workerRams.getOrElse(workerIndex(ref)) { 0 }
             }
         }
-        val layerAllocations = allocateLayersByRam(
+        val allocationDevices =
+            if (placement.mode == MainModelPlacementMode.RESIDENT) placement.devices.take(1) else placement.devices
+        val manualAllocations = if (placement.mode == MainModelPlacementMode.DISTRIBUTED &&
+            request.layerPlanning.isManual
+        ) {
+            val values = allocationDevices.map { request.manualSplit[it.stableKey()] }
+            when (val result = DistributedManualSplit.evaluate(request.layerPlanning, values, request.modelLayers)) {
+                is DistributedManualSplit.Result.Valid -> allocationDevices.mapIndexed { index, device ->
+                    val assigned = result.layers[index]
+                    DistributedLayerAllocation(
+                        device = device,
+                        contributedRamMiB = contribution(device),
+                        normalizedShare = assigned.toFloat() / request.modelLayers,
+                        assignedLayers = assigned
+                    )
+                }
+                is DistributedManualSplit.Result.Invalid ->
+                    throw IllegalArgumentException("Invalid manual split: ${result.reason} (total ${result.total})")
+            }
+        } else null
+        val manualWarnings = manualAllocations?.let {
+            DistributedManualSplit.ramWarnings(it, request.modelSizeMiB, request.modelLayers)
+        }.orEmpty()
+        val layerPlan = if (manualAllocations == null && placement.mode == MainModelPlacementMode.DISTRIBUTED &&
+            request.layerPlanning == DistributedLayerPlanning.OPTIMAL_NETWORK &&
+            request.modelSizeMiB > 0 &&
+            allocationDevices.sumOf { contribution(it) } > 0
+        ) {
+            DistributedLayerPlanner.plan(
+                layers = request.modelLayers,
+                modelSizeMiB = request.modelSizeMiB,
+                devices = allocationDevices.map { DistributedPlanDevice(it, contribution(it)) },
+                workerRttMs = request.workerRttMs
+            )
+        } else null
+        val layerAllocations = manualAllocations ?: layerPlan?.allocations?.filter { it.assignedLayers > 0 } ?: allocateLayersByRam(
             layers = request.modelLayers,
-            devices = if (placement.mode == MainModelPlacementMode.RESIDENT) placement.devices.take(1) else placement.devices,
+            devices = allocationDevices,
             ramMiB = ::contribution
         )
         val selectedMainRefs = layerAllocations.map { it.device }
@@ -271,13 +342,17 @@ object DistributedLlamaLaunchResolver {
             }
         }.distinct()
         val kvHost = request.kvPlacement.device
+        // Row split moves every matmul across the network each token, which is unusable over
+        // Wi-Fi RPC. A KV host that lives on an RPC worker therefore keeps the layer split.
+        val kvHostOnRpc = request.kvPlacement.mode == DistributedKvPlacementMode.ACCELERATOR_DEVICE &&
+            (kvHost?.kind == DistributedDeviceKind.WORKER || usedWorkers.isNotEmpty())
         val effectiveSplitMode = when {
-            request.kvPlacement.mode == DistributedKvPlacementMode.ACCELERATOR_DEVICE -> "row"
+            request.kvPlacement.mode == DistributedKvPlacementMode.ACCELERATOR_DEVICE && !kvHostOnRpc -> "row"
             placement.mode == MainModelPlacementMode.RESIDENT -> "none"
             targetDevices.size > 1 -> "layer"
             else -> null
         }
-        val mainGpu = if (request.kvPlacement.mode == DistributedKvPlacementMode.ACCELERATOR_DEVICE) {
+        val mainGpu = if (request.kvPlacement.mode == DistributedKvPlacementMode.ACCELERATOR_DEVICE && !kvHostOnRpc) {
             requireNotNull(kvHost) { "A KV host device is required" }
             val name = when (kvHost.kind) {
                 DistributedDeviceKind.MASTER_CPU -> error("Master CPU uses CPU KV placement")
@@ -319,6 +394,7 @@ object DistributedLlamaLaunchResolver {
             contextSize = request.contextSize,
             threads = request.threads,
             batchSize = request.batchSize,
+            physicalBatchSize = DistributedPerf.coerceUbatch(request.ubatchSize),
             port = request.port,
             temperature = request.temperature,
             host = request.host,
@@ -372,7 +448,8 @@ object DistributedLlamaLaunchResolver {
             ngramMapK4VSizeM = request.ngramMapK4VSizeM,
             ngramMapK4VMinHits = request.ngramMapK4VMinHits,
             parallel = request.parallel,
-            cacheRam = request.cacheRam,
+            cacheRam = request.cacheRam ?: DistributedRpcStatePolicy.defaultCacheRam(usedWorkers.isNotEmpty(), request.customFlags),
+            contextCheckpoints = DistributedRpcStatePolicy.contextCheckpoints(usedWorkers.isNotEmpty(), request.customFlags),
             emitDefaultCachePolicyArgs = false,
             customFlags = request.customFlags,
             flashAttention = request.flashAttention
@@ -394,7 +471,10 @@ object DistributedLlamaLaunchResolver {
             speculativePlacement = request.speculativePlacement,
             speculativeWorkerIndex = effectiveSpeculativeWorkerIndex,
             commandTemplate = request.commandTemplate?.takeIf(String::isNotBlank),
-            customCommand = request.customCommand?.takeIf(String::isNotBlank)
+            customCommand = request.customCommand?.takeIf(String::isNotBlank),
+            planWarnings = layerPlan?.warnings ?: manualWarnings,
+            estimatedNetworkMsPerToken = layerPlan?.estimatedNetworkMsPerToken,
+            estimatedComputeMsPerToken = layerPlan?.estimatedComputeMsPerToken
         )
     }
 
@@ -428,4 +508,25 @@ object DistributedLlamaLaunchResolver {
             )
         }
     }
+}
+
+/**
+ * KV state reads over RPC cost one blocking round trip per tensor (per V row with flash attention off), so a context
+ * checkpoint or a prompt-cache save of a slot whose KV lives on a helper takes minutes on Wi-Fi/VPN.
+ * See docs/review/2026-11-09-distributed-prefill/findings.md.
+ */
+internal object DistributedRpcStatePolicy {
+    private val checkpointFlags = setOf("-ctxcp", "--ctx-checkpoints", "--swa-checkpoints")
+    private val cacheRamFlags = setOf("-cram", "--cache-ram")
+
+    private fun hasFlag(customFlags: String?, names: Set<String>): Boolean =
+        customFlags.orEmpty().split(Regex("\\s+")).any { it.substringBefore('=') in names }
+
+    /** `--ctx-checkpoints 0` whenever helpers are used, unless the user's custom flags set it. */
+    fun contextCheckpoints(usesRpcWorkers: Boolean, customFlags: String?): Int? =
+        if (usesRpcWorkers && !hasFlag(customFlags, checkpointFlags)) 0 else null
+
+    /** Host prompt-cache saves read the slot's KV back from the helpers; off unless the user set a value. */
+    fun defaultCacheRam(usesRpcWorkers: Boolean, customFlags: String?): Int? =
+        if (usesRpcWorkers && !hasFlag(customFlags, cacheRamFlags)) 0 else null
 }

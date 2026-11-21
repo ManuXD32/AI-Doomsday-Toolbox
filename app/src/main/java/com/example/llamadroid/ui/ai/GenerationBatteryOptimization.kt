@@ -4,7 +4,6 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.PowerManager
-import android.provider.Settings
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -82,17 +81,16 @@ class BatteryOptimizationGateState(
     }
 
     fun openBatterySettings() {
-        val intent = Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS).apply {
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        }
-        context.startActivity(intent)
+        com.example.llamadroid.ui.settings.SafeSettingsIntents.openBatterySettings(context)
     }
 
     fun openDeviceSpecificFix() {
         val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://dontkillmyapp.com")).apply {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
-        context.startActivity(intent)
+        runCatching { context.startActivity(intent) }.onFailure {
+            com.example.llamadroid.ui.settings.SafeSettingsIntents.showToast(context, com.example.llamadroid.R.string.startup_settings_unavailable)
+        }
     }
 }
 

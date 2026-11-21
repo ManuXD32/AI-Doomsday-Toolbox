@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="feature_guide_worlds_title">3D worlds</string>
+    <string name="feature_recipe_worlds_create_play_title">Make and play a 3D world</string>
+    <string name="feature_step_worlds_create_play_orient">3D worlds are interactive scenes the chat model writes with three.js. Pick the \"3D World Builder\" prompt profile in a chat and describe the scene you want. Saved worlds are listed here.</string>
+    <string name="feature_step_worlds_create_play_read">When the reply is finished, a 3D world card appears under it. Tap Play to run it in the chat or Fullscreen for more room. Use the joystick to move, drag to look, and \"Go to…\" to jump to named objects. Tap Save to keep it in this list.</string>
+    <string name="feature_step_worlds_create_play_recover">If the screen stays blank, read the error panel: it lists what failed. A cut-off reply needs a shorter request or a larger context. Worlds run offline, so remote textures or models will not load.</string>
+</resources>

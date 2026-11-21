@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="chat_card_omni_text_placeholder">Escribe aquí</string>
+    <string name="chat_card_omni_function_label">f(x) =</string>
+    <string name="chat_card_omni_function_desc">Fórmula en x: %1$s</string>
+    <string name="chat_card_omni_plot_desc">Gráfica de %1$s</string>
+    <string name="chat_card_omni_plot_range">x: %1$s a %2$s · y: %3$s a %4$s</string>
+    <string name="chat_card_omni_plot_empty">No hay nada que dibujar con estos valores</string>
+    <string name="chat_card_omni_table_x">x</string>
+    <string name="chat_card_omni_table_desc">Tabla de valores de %1$s</string>
+    <string name="chat_card_omni_matrix_desc">Matriz %1$s, %2$s filas por %3$s columnas</string>
+    <string name="chat_card_omni_matrix_rows">Filas</string>
+    <string name="chat_card_omni_matrix_cols">Columnas</string>
+    <string name="chat_card_omni_matrix_op_add">A+B</string>
+    <string name="chat_card_omni_matrix_op_sub">A−B</string>
+    <string name="chat_card_omni_matrix_op_mul">A×B</string>
+    <string name="chat_card_omni_matrix_op_det">det A</string>
+    <string name="chat_card_omni_matrix_op_inv">A⁻¹</string>
+    <string name="chat_card_omni_matrix_op_transpose">Aᵀ</string>
+    <string name="chat_card_omni_matrix_dims">Los tamaños no permiten esta operación.</string>
+    <string name="chat_card_omni_matrix_singular">Esta matriz no tiene inversa (el determinante es 0).</string>
+    <string name="chat_card_omni_matrix_not_square">Esta operación necesita una matriz cuadrada.</string>
+    <string name="chat_card_omni_matrix_invalid">Rellena todas las celdas con un número.</string>
+    <string name="chat_card_omni_matrix_scalar">%1$s = %2$s</string>
+    <string name="chat_card_omni_err_unknown">Nombre desconocido: %1$s</string>
+    <string name="chat_card_omni_err_unknown_fn">Función desconocida: %1$s</string>
+    <string name="chat_card_omni_err_text">No se puede usar texto en un cálculo</string>
+    <string name="chat_card_omni_err_else">A la fórmula le falta la parte else</string>
+    <string name="chat_card_omni_err_formula">La fórmula no es válida</string>
+    <plurals name="chat_card_omni_issues_title">
+        <item quantity="one">Esta tarjeta tiene %1$d problema</item>
+        <item quantity="many">Esta tarjeta tiene %1$d de problemas</item>
+        <item quantity="other">Esta tarjeta tiene %1$d problemas</item>
+    </plurals>
+    <string name="chat_card_omni_issues_fix">Pedir que lo corrija</string>
+    <string name="chat_card_omni_issues_message">La tarjeta “%1$s” tiene errores:\n%2$s\nEnvía una tarjeta corregida.</string>
+    <string name="chat_card_omni_quiz_score">Puntuación: %1$d/%2$d</string>
+    <string name="chat_card_omni_quiz_correct">%1$s (correcta)</string>
+    <string name="chat_card_omni_quiz_wrong">%1$s (tu respuesta, incorrecta)</string>
+    <string name="chat_card_omni_card_flip">Toca la tarjeta para darle la vuelta</string>
+    <string name="chat_card_omni_card_prev">Anterior</string>
+    <string name="chat_card_omni_card_next">Siguiente</string>
+    <string name="chat_card_omni_counter">%1$d/%2$d</string>
+    <string name="chat_card_omni_step_counter">Paso %1$d/%2$d</string>
+    <string name="chat_card_omni_step_back">Atrás</string>
+    <string name="chat_card_omni_step_next">Siguiente</string>
+    <string name="chat_card_omni_progress_desc">%1$s: %2$s de %3$s</string>
+    <string name="chat_card_omni_bar_desc">%1$s: %2$s</string>
+    <string name="chat_card_omni_date_pick">Elegir una fecha</string>
+    <string name="chat_card_omni_log_label">Descripción</string>
+    <string name="chat_card_omni_log_amount">Importe</string>
+    <string name="chat_card_omni_log_add">Añadir</string>
+    <string name="chat_card_omni_log_delete">Eliminar %1$s</string>
+    <string name="chat_card_omni_log_total">Total: %1$s</string>
+    <string name="chat_card_omni_log_empty">Aún no hay entradas</string>
+    <string name="chat_card_omni_score_add">Sumar a %1$s</string>
+    <string name="chat_card_omni_score_sub">Restar a %1$s</string>
+    <string name="chat_card_omni_interval_round">Ronda %1$d/%2$d</string>
+</resources>

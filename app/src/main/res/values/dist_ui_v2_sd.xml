@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Media (Stable Diffusion) distributed screens, plain-language layer (W21c) -->
+    <string name="sd_ui2_hub_title">Images and video across phones</string>
+    <string name="sd_ui2_hub_subtitle">Use several phones together to make images and videos. One phone is the Main device (master); the others lend their memory as helpers.</string>
+    <string name="sd_ui2_hub_helper_title">Lend this phone\'s memory (Helper)</string>
+    <string name="sd_ui2_hub_helper_desc">Let another phone use this one\'s memory and processor while it makes images or video.</string>
+    <string name="sd_ui2_open_helper">Open helper</string>
+    <string name="sd_ui2_worker_title">Helper phone (media)</string>
+    <string name="sd_ui2_worker_subtitle">Lend this phone\'s memory to the Main device for images and video.</string>
+
+    <string name="sd_ui2_how_hub_1">On the other phones, open Helper and tap Start sharing.</string>
+    <string name="sd_ui2_how_hub_2">On this phone, open Main device and add those helpers.</string>
+    <string name="sd_ui2_how_hub_3">Choose a model, write a prompt and start.</string>
+    <string name="sd_ui2_how_worker_1">Choose how much memory to lend and tap Start sharing.</string>
+    <string name="sd_ui2_how_worker_2">On the Main device, add this phone using the address shown below.</string>
+    <string name="sd_ui2_how_worker_3">Keep this phone on the same Wi-Fi as the Main device while it works.</string>
+    <string name="sd_ui2_how_master_1">Add the helpers that are sharing their memory.</string>
+    <string name="sd_ui2_how_master_2">Choose how the work is split. Automatic memory plan is a good default.</string>
+    <string name="sd_ui2_how_master_3">Pick a model and a prompt, then start the run.</string>
+    <string name="sd_ui2_how_network_1">Start a run on the Main device.</string>
+    <string name="sd_ui2_how_network_2">Helpers that take part appear below.</string>
+    <string name="sd_ui2_how_network_3">If something fails, open the technical log.</string>
+
+    <string name="sd_ui2_worker_idle_message">Tap Start sharing so the Main device can use this phone.</string>
+    <string name="sd_ui2_worker_running_message">The Main device can add this address: %1$s</string>
+    <plurals name="sd_ui2_worker_connections">
+        <item quantity="one">%d Main device connected</item>
+        <item quantity="other">%d Main devices connected</item>
+    </plurals>
+    <string name="sd_ui2_worker_advanced_title">Advanced: network address and cache</string>
+    <string name="sd_ui2_worker_advanced_hint">Most people never need to change these. The address is where this helper listens for the Main device.</string>
+    <string name="sd_ui2_worker_start">Start sharing</string>
+    <string name="sd_ui2_worker_stop">Stop sharing</string>
+
+    <string name="sd_ui2_master_none_title">No helpers yet</string>
+    <string name="sd_ui2_master_none_message">Add at least one helper so the work can be shared.</string>
+    <plurals name="sd_ui2_master_ready_title">
+        <item quantity="one">%d helper ready</item>
+        <item quantity="other">%d helpers ready</item>
+    </plurals>
+    <string name="sd_ui2_master_ready_message">Choose a model below and start the run.</string>
+    <string name="sd_ui2_master_running_title">Generating</string>
+    <string name="sd_ui2_master_running_message">The work is being shared with your enabled helpers.</string>
+    <string name="sd_ui2_master_error_title">This needs your attention</string>
+    <string name="sd_ui2_no_helpers_title">No helpers yet</string>
+    <string name="sd_ui2_no_helpers_message">Start sharing on another phone, then add it here by its address.</string>
+
+    <string name="sd_ui2_network_idle_title">Nothing is running</string>
+    <string name="sd_ui2_network_idle_message">When a run starts, the helpers that take part appear here.</string>
+    <plurals name="sd_ui2_network_live_title">
+        <item quantity="one">%d helper is taking part</item>
+        <item quantity="other">%d helpers are taking part</item>
+    </plurals>
+</resources>

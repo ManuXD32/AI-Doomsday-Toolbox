@@ -6,8 +6,7 @@ import android.content.res.Configuration
 import androidx.activity.ComponentActivity
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.ui.semantics.SemanticsProperties
-import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertExists
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasAnyDescendant
@@ -16,6 +15,7 @@ import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -85,7 +85,7 @@ class VideoFeatureGuideConnectedTest {
 
         val galleryLabel = localized(R.string.video_gen_tab_gallery)
         val createLabel = localized(R.string.video_gen_tab_generate)
-        val profileLabel = localized(R.string.video_runtime_custom_profile)
+        val profileLabel = localized(R.string.sd_r8_w06_picker_title)
 
         selectTab(galleryLabel)
         assertSelected(galleryLabel)
@@ -127,14 +127,14 @@ class VideoFeatureGuideConnectedTest {
         assertVideoRoute()
         assertSelected(createLabel)
 
-        // Binary availability owns this control. Missing native binaries must leave a usable
-        // Skip path; when available, observe the real profile event without starting inference.
-        val profileChip = rule.onNodeWithText(profileLabel)
-        if (profileChip.fetchSemanticsNode().config.contains(SemanticsProperties.Disabled)) {
-            profileChip.assertIsNotEnabled()
+        // The picker's preset cards record the profile event; with no installed model only the
+        // title and the get-models button exist, so the Next button is the Skip path.
+        rule.onNodeWithText(profileLabel).assertExists()
+        val presetCard = rule.onAllNodesWithText(localized(R.string.sd_r8_w06_ready)).fetchSemanticsNodes()
+        if (presetCard.isEmpty()) {
             rule.onNodeWithTag("tour_next").performClick()
         } else {
-            profileChip.performClick()
+            rule.onAllNodesWithText(localized(R.string.sd_r8_w06_ready))[0].performClick()
         }
         check(awaitTag("tour_step_video.quickstart.recover")) { "Required video guide step did not appear: " + "tour_step_video.quickstart.recover" }
         assertVideoRoute()

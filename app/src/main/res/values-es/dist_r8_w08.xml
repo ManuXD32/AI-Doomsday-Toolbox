@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Main-device screen shell and step 3 (Run) -->
+    <string name="sd_r8_w08_step_model">Modelo</string>
+    <string name="sd_r8_w08_step_devices">Dispositivos</string>
+    <string name="sd_r8_w08_step_run">Ejecutar</string>
+    <string name="sd_r8_w08_step_done_cd">%1$s, completado</string>
+    <string name="sd_r8_w08_next">Siguiente</string>
+    <string name="sd_r8_w08_loading">Cargando tu configuración</string>
+    <string name="sd_r8_w08_input_title">Imagen de entrada</string>
+    <string name="sd_r8_w08_prompt_title">Prompt</string>
+    <string name="sd_r8_w08_size_title">Tamaño y calidad</string>
+    <string name="sd_r8_w08_adv_sampling">Muestreo</string>
+    <string name="sd_r8_w08_adv_runtime">Memoria y velocidad</string>
+    <string name="sd_r8_w08_adv_cache">Caché</string>
+    <string name="sd_r8_w08_links_title">Resultados y red</string>
+    <plurals name="sd_r8_w08_silence_hint">
+        <item quantity="one">El generador no muestra salida desde hace %d minuto. Puede estar cargando o transfiriendo modelos. Detén la ejecución si sigue en silencio.</item>
+        <item quantity="many">El generador no muestra salida desde hace %d de minutos. Puede estar cargando o transfiriendo modelos. Detén la ejecución si sigue en silencio.</item>
+        <item quantity="other">El generador no muestra salida desde hace %d minutos. Puede estar cargando o transfiriendo modelos. Detén la ejecución si sigue en silencio.</item>
+    </plurals>
+</resources>

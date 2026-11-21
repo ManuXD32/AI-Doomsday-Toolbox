@@ -69,14 +69,22 @@ internal data class KvUtilitySlotChoice(val slot: Int, val saveHolder: Boolean)
 /**
  * Picks the slot for a background utility request. [held] maps slots with a recorded holder to
  * "that holder's chat has a live turn"; [reserved] are slots assigned to a chat that has not run
- * yet. Preference: a never-held slot, then a slot whose holder is idle (saved first), then the
- * lowest slot (saved first). Null when the server reports no slots.
+ * yet. [chatSlots] are slots a chat owns or last used: they are never chosen (the utility request
+ * would evict the chat's cached prefix). Preference: a never-held slot, then a slot whose holder is
+ * idle (saved first), then the lowest remaining slot (saved first). Null when the server reports no
+ * slots or every slot belongs to a chat; the caller then sends the request without `id_slot`.
  */
-internal fun chooseUtilitySlot(totalSlots: Int, held: Map<Int, Boolean>, reserved: Set<Int>): KvUtilitySlotChoice? {
+internal fun chooseUtilitySlot(
+    totalSlots: Int,
+    held: Map<Int, Boolean>,
+    reserved: Set<Int>,
+    chatSlots: Set<Int> = emptySet()
+): KvUtilitySlotChoice? {
     if (totalSlots <= 0) return null
-    val all = 0 until totalSlots
+    val all = (0 until totalSlots).filter { it !in chatSlots }
+    if (all.isEmpty()) return null
     all.firstOrNull { it !in held && it !in reserved }?.let { return KvUtilitySlotChoice(it, saveHolder = false) }
     all.firstOrNull { held[it] != true && it !in reserved }?.let { return KvUtilitySlotChoice(it, saveHolder = true) }
     all.firstOrNull { held[it] != true }?.let { return KvUtilitySlotChoice(it, saveHolder = true) }
-    return KvUtilitySlotChoice(all.first, saveHolder = true)
+    return KvUtilitySlotChoice(all.first(), saveHolder = true)
 }

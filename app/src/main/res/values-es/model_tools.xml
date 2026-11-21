@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="model_quantize_action">Cuantizar…</string>
+    <string name="model_quantize_title">Cuantizar modelo</string>
+    <string name="model_quantize_source">Origen: %1$s (%2$s)</string>
+    <string name="model_quantize_type_label">Tipo de destino</string>
+    <string name="model_quantize_q8_0">Q8_0 (recomendado): casi sin pérdida, aproximadamente la mitad de F16</string>
+    <string name="model_quantize_q4_k_m">Q4_K_M: buena calidad, aproximadamente un cuarto de F16</string>
+    <string name="model_quantize_q4_0">Q4_0: el más pequeño y rápido, menor calidad</string>
+    <string name="model_quantize_estimate">Tamaño estimado: %1$s. Salida: %2$s</string>
+    <string name="model_quantize_requantize_warning">Este archivo ya parece cuantizado. Recuantizar un modelo cuantizado pierde calidad; es mejor cuantizar desde un archivo F16 o BF16.</string>
+    <string name="model_quantize_start">Cuantizar</string>
+    <string name="model_quantize_progress">Cuantizando tensor %1$d de %2$d</string>
+    <string name="model_quantize_preparing">Iniciando…</string>
+    <string name="model_quantize_done">Listo. El modelo cuantizado se añadió a tus modelos locales: %1$s</string>
+    <string name="model_quantize_register_failed">El archivo se creó, pero no se pudo añadir a la lista de modelos: %1$s</string>
+    <string name="model_quantize_fail_no_binary">El cuantizador no está instalado. Instala el módulo LLM de tu nivel de CPU e inténtalo de nuevo.</string>
+    <string name="model_quantize_fail_no_space">No hay almacenamiento libre suficiente. Se necesitan unos %1$s junto al archivo de origen.</string>
+    <string name="model_quantize_fail_exit">La cuantización falló: %1$s</string>
+    <string name="model_quantize_fail_cancelled">Se canceló la cuantización.</string>
+
+    <string name="branchy_export_title">Exportar a GGUF</string>
+    <string name="branchy_export_hint">Convierte el último punto de control a un archivo GGUF para llama.cpp, guardado en la carpeta de exportación de esta ejecución y añadido a tus modelos locales.</string>
+    <string name="branchy_export_type_label">Tipo de pesos</string>
+    <string name="branchy_export_type_auto">Automático</string>
+    <string name="branchy_export_type_f16">F16</string>
+    <string name="branchy_export_type_q8_0">Q8_0</string>
+    <string name="branchy_export_type_q4_0">Q4_0</string>
+    <string name="branchy_export_start">Exportar a GGUF</string>
+    <string name="branchy_export_running">Exportando…</string>
+    <string name="branchy_export_done">Exportado y añadido a los modelos locales: %1$s</string>
+    <string name="branchy_export_failed">La exportación falló: %1$s</string>
+    <string name="branchy_export_no_checkpoint">Aún no hay punto de control. Entrena un rato primero.</string>
+    <string name="branchy_export_no_binary">El entrenador Branchy no está instalado.</string>
+    <string name="branchy_export_open_chat">Abrir en el chat</string>
+    <string name="branchy_export_benchmark">Benchmark</string>
+</resources>

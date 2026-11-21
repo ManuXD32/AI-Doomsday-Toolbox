@@ -181,7 +181,7 @@ fun sanitizeCuratedBundlePrefix(value: String): String {
 object CuratedModelBundleRegistry {
     val bundles: List<CuratedModelBundle>
         get() = LlamaCuratedBundleCatalog.bundles + AdetailerCuratedBundleCatalog.bundles +
-            AudioCuratedBundleCatalog.bundles
+            AudioCuratedBundleCatalog.bundles + EmbeddingCuratedBundleCatalog.bundles
 
     val files: List<CuratedBundleFile>
         get() = bundles.flatMap { it.files }

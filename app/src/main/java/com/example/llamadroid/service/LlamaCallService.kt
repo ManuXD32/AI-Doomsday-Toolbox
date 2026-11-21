@@ -119,6 +119,7 @@ class LlamaCallService : Service() {
                 val serverId = intent.getLongExtra(EXTRA_SERVER_ID, -1L)
                 if (chatId <= 0L || serverId <= 0L) {
                     publishError(getString(R.string.llama_call_error_missing_params))
+                    if (callJob?.isActive != true) ForegroundStart.satisfyAndStop(this@LlamaCallService)
                     stopSelf(startId)
                 } else if (callJob?.isActive == true) {
                     publishError(getString(R.string.llama_call_error_already_active))

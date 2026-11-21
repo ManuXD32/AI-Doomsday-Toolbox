@@ -32,6 +32,7 @@ class KiwixService : Service() {
     private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     
     private var kiwixProcess: Process? = null
+    @Volatile private var stopRequested = false
     private var notificationTaskId: Int? = null
     private lateinit var settingsRepo: SettingsRepository
     
@@ -180,6 +181,7 @@ class KiwixService : Service() {
                 // Set library path
                 pb.environment()["LD_LIBRARY_PATH"] = binaryRepo.getLibraryDir()
                 
+                stopRequested = false
                 kiwixProcess = pb.start()
                 _isRunning.value = true
                 
@@ -205,10 +207,15 @@ class KiwixService : Service() {
                 WakeLockManager.release("KiwixService")
                 
             } catch (e: Exception) {
-                DebugLog.log("[KIWIX] Error starting server: ${e.message}")
-                _isRunning.value = false
-                _serverUrl.value = null
-                updateNotification("Error: ${e.message}")
+                if (e is java.io.IOException && stopRequested) {
+                    // stopServer() destroyed the process under the reader: expected, not an error.
+                    DebugLog.log("[KIWIX] Server stopped")
+                } else {
+                    DebugLog.log("[KIWIX] Error starting server: ${e.message}")
+                    _isRunning.value = false
+                    _serverUrl.value = null
+                    updateNotification("Error: ${e.message}")
+                }
                 WakeLockManager.release("KiwixService")
             }
         }
@@ -218,6 +225,7 @@ class KiwixService : Service() {
      * Stop the kiwix-serve process
      */
     fun stopServer() {
+        stopRequested = true
         kiwixProcess?.destroy()
         kiwixProcess = null
         _isRunning.value = false

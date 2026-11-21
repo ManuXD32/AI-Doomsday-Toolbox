@@ -82,7 +82,6 @@ object DistributedFixtures {
             "[10:41:31.220] decode: 512 prompt tokens in 3.1 s (165.2 t/s)",
             "[10:41:38.906] decode: generated 128 tokens at 14.6 tokens/s"
         )
-        DistributedService.setTransferProgress(0)
         DistributedMasterRuntimeState::class.java.getDeclaredField("_state").apply { isAccessible = true }.let { f ->
             @Suppress("UNCHECKED_CAST")
             (f.get(DistributedMasterRuntimeState) as MutableStateFlow<ServerState>).value = ServerState.Running(8080)

@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="worlds_ui_card_title_html">Página HTML</string>
+    <string name="worlds_ui_card_title">Mundo 3D</string>
+    <string name="worlds_ui_play">Jugar</string>
+    <string name="worlds_ui_stop">Detener</string>
+    <string name="worlds_ui_fullscreen">Pantalla completa</string>
+    <string name="worlds_ui_save">Guardar</string>
+    <string name="worlds_ui_saved">Guardado en la biblioteca</string>
+    <string name="worlds_ui_open">Abrir</string>
+    <string name="worlds_ui_run_html">Ejecutar HTML</string>
+    <string name="worlds_ui_rename">Renombrar</string>
+    <string name="worlds_ui_delete">Eliminar</string>
+    <string name="worlds_ui_cancel">Cancelar</string>
+    <string name="worlds_ui_confirm">Aceptar</string>
+    <string name="worlds_ui_rename_title">Renombrar mundo</string>
+    <string name="worlds_ui_title_label">Título</string>
+    <string name="worlds_ui_delete_title">¿Eliminar mundo?</string>
+    <string name="worlds_ui_delete_message">\"%1$s\" se eliminará de este dispositivo.</string>
+    <string name="worlds_ui_default_title">Mundo 3D</string>
+    <string name="worlds_ui_library_title">Páginas HTML y mundos 3D</string>
+    <string name="worlds_ui_library_subtitle">Escenas interactivas guardadas desde los chats. Funcionan sin conexión.</string>
+    <string name="worlds_ui_empty_title">Aún no hay mundos guardados</string>
+    <string name="worlds_ui_empty_body">Elige el perfil de prompt \"Constructor de mundos 3D\" en un chat y pide una escena, por ejemplo un recinto de elefantes hecho de vóxeles. Cuando la respuesta contenga un mundo, pulsa Guardar en su tarjeta y aparecerá aquí.</string>
+    <string name="worlds_ui_not_found">No se pudo cargar este mundo.</string>
+
+    <string name="llama_prompt_profile_world_builder">Constructor de mundos 3D</string>
+    <string name="llama_prompt_profile_world_builder_prompt">Construyes mundos 3D interactivos que funcionan sin conexión en un WebView con three.js. Escribe la PRIMERA versión como UN archivo HTML completo dentro de un único bloque de código ```html, con solo una explicación breve fuera; la app guarda ese bloque como worlds/&lt;nombre&gt;.html en el espacio de trabajo de este chat. Reglas: usa &lt;script type=\"module\"&gt; con import * as THREE from \'three\' (los addons desde \'three/addons/…\'). No cargues texturas, modelos, fuentes ni imágenes externas; genera todo de forma procedural con geometrías, colores y texturas de canvas. Da a cada objeto importante un nombre único (mesh.name = \'elefante\') porque los nombres forman la lista de \"Lugares\" de la app. La app ya añade controles táctiles (joystick, arrastrar para mirar, caminar/volar, restablecer vista), así que no escribas tus propios controles de cámara. Para escenas de vóxeles usa bucles y pequeñas funciones auxiliares (por ejemplo addBox(x, y, z, color)) para mantener el código corto. Añade luces, un suelo y un color de cielo. Ejecuta un bucle de animación que llame a renderer.render(scene, camera) y gestiona el cambio de tamaño de la ventana. Asegúrate de que el HTML esté completo y cerrado con &lt;/html&gt;. Para CORREGIR o CAMBIAR un mundo existente, nunca vuelvas a escribir el archivo completo: usa search_workspace_file para localizar el código, read_workspace_file con un rango de líneas para verlo y replace_in_workspace_file para la edición (edit_workspace_lines para varias líneas). La app muestra el archivo actualizado como una tarjeta con la última versión.</string>
+    <string name="worlds_ui_latest_version">Última versión de %1$s</string>
+    <string name="worlds_ui_workspace_path">Archivo del espacio de trabajo: %1$s</string>
+    <string name="worlds_ui_hide_controls">Ocultar controles</string>
+    <string name="worlds_ui_show_controls">Mostrar controles</string>
+    <string name="worlds_ui_file_saved">Archivo guardado</string>
+    <string name="worlds_ui_file_save_failed">No se pudo guardar el archivo</string>
+    <string name="llama_prompt_profile_world_coder">Codificador 3D (three.js)</string>
+    <string name="llama_prompt_profile_world_coder_prompt">Use only the Three.js core ES module from https://cdnjs.cloudflare.com/ajax/libs/three.js/0.160.0/three.module.min.js. Do not import addons or legacy examples/js paths; implement any camera controls directly inside the HTML. Reglas de edición. La primera versión: responde con UN bloque ```html completo; la app lo guarda como worlds/&lt;nombre&gt;.html. Para cambiar un mundo existente: llama a search_workspace_file para encontrar las líneas y luego a replace_in_workspace_file con el texto antiguo exacto. NUNCA vuelvas a escribir el archivo entero. Tras editar, responde con una sola frase corta. Ejemplo: search_workspace_file {\"path\":\"worlds/rose.html\",\"query\":\"petal\"} y luego replace_in_workspace_file {\"path\":\"worlds/rose.html\",\"old_text\":\"0xff0000\",\"new_text\":\"0xff66aa\"}.</string>
+    <string name="llama_prompt_profile_world_coder_glb">Codificador de activos 3D (GLB)</string>
+    <string name="llama_prompt_profile_world_coder_glb_prompt">Create game assets for the Godot editor, which uses GLB files. Create whatever the user requests as a good-quality low-poly asset using only Three.js in one complete standalone HTML file. The HTML must show the asset and include an Export GLB button that downloads a working GLB. If the requested asset needs animation, add it and include the animation in the exported GLB; otherwise make it static. Reglas de edición. La primera versión: responde con UN bloque ```html completo; la app lo guarda como worlds/&lt;nombre&gt;.html. Para cambiar un mundo existente: llama a search_workspace_file para encontrar las líneas y luego a replace_in_workspace_file con el texto antiguo exacto. NUNCA vuelvas a escribir el archivo entero. Tras editar, responde con una sola frase corta. Ejemplo: search_workspace_file {\"path\":\"worlds/rose.html\",\"query\":\"petal\"} y luego replace_in_workspace_file {\"path\":\"worlds/rose.html\",\"old_text\":\"0xff0000\",\"new_text\":\"0xff66aa\"}.</string>
+    <string name="llama_bundle_world_coder_title">Constructor de mundos 3D · Qwen3.5 4B 3D Coder (Q4_K_M)</string>
+    <string name="llama_bundle_world_coder_desc">Crea mundos three.js en un único archivo HTML. Incluye el proyector de visión. Úsalo con el perfil de prompt \"Codificador 3D (three.js)\" y un contexto de 65536.</string>
+    <string name="llama_bundle_world_coder_glb_title">Constructor de activos 3D (GLB) · Qwen3.5 4B GLB 3D Coder (Q4_K_M)</string>
+    <string name="llama_bundle_world_coder_glb_desc">Crea activos low-poly para juegos con un botón Export GLB para Godot. Incluye el proyector de visión (compartido con el otro 3D coder). Úsalo con el perfil de prompt \"Codificador de activos 3D (GLB)\" y un contexto de 65536.</string>
+</resources>

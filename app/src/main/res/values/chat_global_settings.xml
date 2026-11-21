@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="chat_global_settings_title">Chat settings</string>
+    <string name="chat_global_settings_subtitle">App-wide options for all chats</string>
+    <string name="chat_global_settings_hub_desc">Documents, helper models, cards, web search, caches</string>
+    <string name="chat_global_documents_title">Documents and knowledge</string>
+    <string name="chat_global_documents_hint">The embedding model turns attached documents and knowledge bases into searchable text.</string>
+    <string name="chat_global_documents_advanced">Advanced (Knowledge base)</string>
+    <string name="chat_global_helpers_title">Helper models</string>
+    <string name="chat_global_cards_title">Interactive cards</string>
+    <string name="chat_global_web_title">Web search</string>
+    <string name="chat_global_caches_title">Caches</string>
+    <string name="chat_global_caches_prepare_hint">\"Prepare caches\" for a specific server is in that server\'s details.</string>
+    <string name="chat_global_new_chats_title">New chats</string>
+    <string name="chat_global_new_chats_servers_hint">Tools and options that new chats on each saved server start with.</string>
+    <string name="chat_global_new_chats_no_servers">No saved servers yet.</string>
+    <string name="chat_global_new_chats_edit_defaults">Edit defaults for new chats</string>
+    <string name="chat_global_delegation_title">Delegation</string>
+    <string name="chat_global_delegation_clear_hint">To clear a runtime\'s cache, use its Agent runtime settings.</string>
+    <string name="chat_global_wear_title">Wear Quick Chat</string>
+    <string name="chat_settings_for_all_chats">Settings for all chats</string>
+    <string name="chat_cards_global_moved_hint">The \"use in new chats\" default and the card types are in Chat settings.</string>
+    <string name="general_chat_settings_link">Prompt caches, web search and helper models are now in Chat settings</string>
+</resources>

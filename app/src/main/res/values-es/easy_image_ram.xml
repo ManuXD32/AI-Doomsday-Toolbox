@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="easy_image_ram_refused">No hay memoria libre suficiente para esta imagen: necesita unos %1$s y solo hay %2$s libres. Cierra otras apps o elige un modelo más pequeño.</string>
+    <string name="easy_image_ram_downscaled">Poca memoria: se creará esta imagen a %1$s con decodificación por teselas.</string>
+    <string name="easy_image_ram_try_anyway">Intentar de todos modos</string>
+</resources>

@@ -136,4 +136,15 @@ class MarkdownTextTest {
         assertEquals(2, markdownSetextHeadingLevelForLine("---"))
         assertNull(markdownSetextHeadingLevelForLine("not a heading"))
     }
+
+    @Test
+    fun backslashEscapes_renderLiteralCharacters() {
+        assertEquals("____ x", markdownInlineTextForTest("\\_\\_\\_\\_ x"))
+        assertEquals("*a* # ~ [b] > |", markdownInlineTextForTest("\\*a\\* \\# \\~ \\[b\\] \\> \\|"))
+        assertEquals("a`b", markdownInlineTextForTest("a\\`b"))
+        // Not escapable (math-style or letters): the backslash stays.
+        assertEquals("\\(x\\) \\n", markdownInlineTextForTest("\\(x\\) \\n"))
+        // Inside a code span the backslash stays.
+        assertEquals(" a\\_b ", markdownInlineTextForTest("`a\\_b`"))
+    }
 }

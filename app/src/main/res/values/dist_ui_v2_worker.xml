@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Hub -->
+    <string name="dist_ui_hub_title">Share AI across phones</string>
+    <string name="dist_ui_hub_how_1">On each helper phone, open Helper device and tap Start sharing.</string>
+    <string name="dist_ui_hub_how_2">On the main phone, open Main device. It finds the helpers on your Wi-Fi.</string>
+    <string name="dist_ui_hub_how_3">Choose a model and start. The model is split across all the phones.</string>
+    <string name="dist_ui_hub_section_llm">Chat and text models</string>
+    <string name="dist_ui_hub_section_media">Images and video</string>
+    <string name="dist_ui_hub_main_title">Use this phone to run a model</string>
+    <string name="dist_ui_hub_main_desc">Main device (master): this phone loads the model and does the chatting. Helper phones lend their memory so bigger models fit.</string>
+    <string name="dist_ui_hub_main_btn">Open Main device</string>
+    <string name="dist_ui_hub_helper_title">Lend this phone\'s memory</string>
+    <string name="dist_ui_hub_helper_desc">Helper device (worker): another phone runs the model and borrows part of this phone\'s memory over Wi-Fi.</string>
+    <string name="dist_ui_hub_helper_btn">Open Helper device</string>
+    <string name="dist_ui_hub_media_title">Share image and video jobs</string>
+    <string name="dist_ui_hub_media_desc">Use several phones together to generate images and video with Stable Diffusion.</string>
+    <string name="dist_ui_hub_info_title">Before you start</string>
+    <string name="dist_ui_hub_info_wifi">All phones must be on the same Wi-Fi network. A faster network (5 GHz) means faster answers.</string>
+    <string name="dist_ui_hub_info_vpn">Turn off any VPN or guest-network mode while sharing. They can stop the phones from seeing each other.</string>
+    <string name="dist_ui_hub_info_security">Sharing is not encrypted. Only use it on a network you trust, like your home Wi-Fi.</string>
+
+    <!-- Helper device screen -->
+    <string name="dist_ui_w_title">Helper device</string>
+    <string name="dist_ui_w_how_1">Choose how much memory to lend, then tap Start sharing.</string>
+    <string name="dist_ui_w_how_2">On the main device, this phone shows up in the helper list by itself. If it does not, add it there with the address shown here.</string>
+    <string name="dist_ui_w_how_3">Keep this phone awake and on Wi-Fi. The main device does the rest.</string>
+    <string name="dist_ui_w_status_idle_title">Ready to share</string>
+    <string name="dist_ui_w_status_idle_message">Nothing is shared until you tap Start sharing.</string>
+    <string name="dist_ui_w_status_blocked_title">Not enough free memory</string>
+    <string name="dist_ui_w_status_blocked_message">Free at least %1$d MB of memory (close other apps) to share this phone.</string>
+    <string name="dist_ui_w_status_waiting_title">Waiting for the main device</string>
+    <string name="dist_ui_w_status_waiting_message">Sharing %1$s of memory as \"%2$s\". Start the search on the main device, or scan the QR code below.</string>
+    <string name="dist_ui_w_status_connected_title">Main device connected</string>
+    <string name="dist_ui_w_status_connected_message">It is using %1$s of this phone\'s memory. Keep the phone on Wi-Fi until you stop sharing.</string>
+    <string name="dist_ui_w_connect_title">Connect the main device</string>
+    <string name="dist_ui_w_connect_message">On the main device, this phone shows up in the helper list by itself. If it does not, tap Add a helper manually and enter this address.</string>
+    <string name="dist_ui_w_connect_address">Or add this phone by hand with this address</string>
+    <string name="dist_ui_w_share_title">Memory to lend</string>
+    <string name="dist_ui_w_share_explain">The main device can use up to this much of this phone\'s memory to hold part of the model. Lend less to keep this phone smooth, or more so the main device can run bigger models.</string>
+    <string name="dist_ui_w_share_note">This amount is not enforced on this phone. Enter the same amount for this phone on the main device so it plans with it.</string>
+    <string name="dist_ui_w_mem_reserved">Kept for Android</string>
+    <string name="dist_ui_w_mem_lending">Lending to the main device</string>
+    <string name="dist_ui_w_adv_title">Advanced settings</string>
+    <string name="dist_ui_w_adv_locked_note">These settings can be changed while sharing is stopped.</string>
+    <string name="dist_ui_w_adv_threads">Processor threads: %1$d</string>
+    <string name="dist_ui_w_adv_threads_desc">More threads can be faster but heat the phone and slow other apps. Four is a good start.</string>
+    <string name="dist_ui_w_adv_cache">Remember model parts</string>
+    <string name="dist_ui_w_adv_cache_desc">Keeps the model parts this phone received, so reconnecting to the same model is much faster. Uses storage.</string>
+    <string name="dist_ui_w_adv_cache_size">Stored on this phone: %1$s</string>
+    <string name="dist_ui_w_adv_cache_clear">Clear stored model parts</string>
+    <string name="dist_ui_w_adv_port">Connection port: %1$d. The main device uses it to reach this phone; it is chosen automatically.</string>
+    <string name="dist_ui_w_monitor_title">Watch the main device (advanced)</string>
+    <string name="dist_ui_w_monitor_desc">Open the web page of the main device on this phone to follow the chat. Enter its address and port.</string>
+    <string name="dist_ui_w_monitor_address">Main device address</string>
+    <string name="dist_ui_w_start">Start sharing</string>
+    <string name="dist_ui_w_stop">Stop sharing</string>
+</resources>

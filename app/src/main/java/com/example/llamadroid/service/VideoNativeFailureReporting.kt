@@ -4,6 +4,7 @@ import android.content.Context
 import com.example.llamadroid.R
 import com.example.llamadroid.sd.SdTaeCheck
 import com.example.llamadroid.sd.SdTaeCompatibility
+import com.example.llamadroid.sd.SdVideoFamily
 import com.example.llamadroid.sd.SdVideoFamilyProfiles
 import com.example.llamadroid.util.DebugLog
 import java.io.File
@@ -76,9 +77,13 @@ fun Context.videoNativeFailureException(
 
 /** Fails before launch when the selected TAE cannot decode the family's latents. */
 fun Context.verifyVideoTaeBeforeLaunch(config: VideoGenerationConfig) {
-    if (!videoRunUsesTae(config)) return
     val family = config.videoFamily ?: return
     val profile = SdVideoFamilyProfiles.resolve(family, config.videoVariant)
+    // LTX-Video 0.9.x has no audio_patchify_proj, which the engine's LTXAV block requires (ltxv.hpp:1356).
+    if (family == SdVideoFamily.LTX_VIDEO && !profile.nativeWorkflowSupported) {
+        throw IllegalStateException(getString(R.string.video_ltx09_unsupported))
+    }
+    if (!videoRunUsesTae(config)) return
     val taePath = config.resolvedVideoComponents().taePath ?: return
     when (val check = SdTaeCompatibility.check(profile, SdTaeCompatibility.readLatentChannels(File(taePath)))) {
         is SdTaeCheck.Mismatch ->

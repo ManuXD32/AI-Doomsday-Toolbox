@@ -33,6 +33,54 @@
 -keep class com.example.llamadroid.service.OllamaService$ChatUsage { *; }
 -keep class com.example.llamadroid.service.OllamaService$ToolCall { *; }
 
+# Gson roots audited for R8 (W33, 1.00005). Without these, R8 full mode strips the
+# generic Signature of non-kept members and Gson restores List/Map fields as
+# LinkedTreeMap (device crash: LinkedTreeMap cannot be cast to DistributedLayerAllocation).
+# GsonKeepRulesTest reflects over every Gson root and fails if a class here is missing.
+# Distributed launch profile graph (DistributedLlamaLaunchProfile, ResolvedDistributedLaunch).
+-keep class com.example.llamadroid.service.DistributedLlamaLaunchProfile { *; }
+-keep class com.example.llamadroid.service.ResolvedDistributedLaunch { *; }
+-keep class com.example.llamadroid.service.DistributedWorkerLaunchSpec { *; }
+-keep class com.example.llamadroid.service.DistributedLayerAllocation { *; }
+-keep class com.example.llamadroid.service.DistributedKvPlacement { *; }
+-keep class com.example.llamadroid.service.DistributedKvPlacementMode { *; }
+-keep class com.example.llamadroid.service.DistributedSpeculativePlacement { *; }
+-keep class com.example.llamadroid.service.DistributedPlanWarning { *; }
+-keep class com.example.llamadroid.service.DistributedPlanWarningType { *; }
+-keep class com.example.llamadroid.service.DistributedDeviceKind { *; }
+-keep class com.example.llamadroid.service.DistributedDeviceRef { *; }
+-keep class com.example.llamadroid.service.HelperTransfer { *; }
+-keep class com.example.llamadroid.service.LlamaConfig { *; }
+-keep class com.example.llamadroid.service.LlamaLoraSpec { *; }
+-keep class com.example.llamadroid.service.LlamaSpeculativeMode { *; }
+-keep class com.example.llamadroid.service.LlamaServerLaunchProfile { *; }
+# Llama server session/owner stores and the OCR exclusive lease.
+-keep class com.example.llamadroid.service.LlamaServerSessionOwner { *; }
+-keep class com.example.llamadroid.service.LlamaServerSessionSnapshot { *; }
+-keep class com.example.llamadroid.service.LlamaServerSessionStatus { *; }
+-keep class com.example.llamadroid.service.LlamaOcrExclusiveLease { *; }
+-keep class com.example.llamadroid.service.LlamaOcrCapturedRuntime { *; }
+-keep class com.example.llamadroid.service.LlamaOcrCapturedRuntimeKind { *; }
+-keep class com.example.llamadroid.service.LlamaOcrLeasePhase { *; }
+# LiteRT-LM worker request/response DTOs and backend doctor result.
+-keep class com.example.llamadroid.service.LiteRtLmWorkerRequestDto { *; }
+-keep class com.example.llamadroid.service.LiteRtLmDoctorRequestDto { *; }
+-keep class com.example.llamadroid.service.LiteRtLmChatStatsDto { *; }
+-keep class com.example.llamadroid.service.LiteRtConversationMessageDto { *; }
+-keep class com.example.llamadroid.service.LiteRtConversationOverrideDto { *; }
+-keep class com.example.llamadroid.service.LiteRtToolCallSpecDto { *; }
+-keep class com.example.llamadroid.service.LiteRtToolDefinitionDto { *; }
+-keep class com.example.llamadroid.service.LiteRtOllamaToolCallDto { *; }
+-keep class com.example.llamadroid.service.LiteRtBackendDoctorResult { *; }
+# Agent remote stream snapshot and locked-screen perf report.
+-keep class com.example.llamadroid.service.AgentRemoteStreamSnapshot { *; }
+-keep class com.example.llamadroid.service.perf.LockedScreenReport { *; }
+# Chat/notes export payloads (import/export JSON files).
+-keep class com.example.llamadroid.ui.ai.llama.LlamaChatExportPayload { *; }
+-keep class com.example.llamadroid.ui.ai.llama.LlamaChatSerializedMessage { *; }
+-keep class com.example.llamadroid.ui.ai.llama.NoteExportPayload { *; }
+-keep class com.example.llamadroid.ui.ai.llama.NotesExportPayload { *; }
+
 # Keep Room entities
 -keep class * extends androidx.room.RoomDatabase { *; }
 -keep @androidx.room.Entity class * { *; }

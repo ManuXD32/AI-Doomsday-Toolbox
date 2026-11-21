@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="net_pref_auto">Auto</string>
+    <string name="net_pref_vpn">VPN</string>
+    <string name="net_pref_lan">LAN</string>
+    <string name="net_pref_in_use_vpn">Usando dirección VPN %1$s</string>
+    <string name="net_pref_in_use_lan">Usando dirección LAN %1$s</string>
+</resources>

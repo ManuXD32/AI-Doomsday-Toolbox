@@ -170,7 +170,7 @@ fun AdventureGateScreen(
     val walkthroughTargets = LocalWalkthroughTargets.current
     val repository = remember(database) { AdventureGateRepository(database) }
     val tamaDao = database.tamaDao()
-    val activePet by tamaDao.observeActivePet().collectAsState(initial = null)
+    val activePet: com.example.llamadroid.tama.db.TamaPetEntity? by tamaDao.observeActivePet().collectAsState(initial = null)
     val pet = remember(activePet) { activePet?.let(PetMapper::toDomain) }
     val petId = pet?.id
     var nowMillis by remember { mutableStateOf(System.currentTimeMillis()) }
@@ -212,10 +212,10 @@ fun AdventureGateScreen(
     val nightArenaRunFlow = remember(petId) {
         petId?.let(repository::observeNightArenaRun) ?: flowOf(null)
     }
-    val profile by profileFlow.collectAsState(initial = null)
+    val profile: AdventureGateProfile? by profileFlow.collectAsState(initial = null)
     val progressRows by progressFlow.collectAsState(initial = emptyList())
-    val battle by battleFlow.collectAsState(initial = null)
-    val nightArenaRun by nightArenaRunFlow.collectAsState(initial = null)
+    val battle: AdventureGateBattleSnapshot? by battleFlow.collectAsState(initial = null)
+    val nightArenaRun: AdventureGateNightArenaRun? by nightArenaRunFlow.collectAsState(initial = null)
     val routeBattle = battle?.takeIf { activeBattle ->
         val isNightBattle = activeBattle.worldId == AdventureGateCatalog.NIGHT_ARENA_WORLD_ID
         (mode == AdventureGateScreenMode.NIGHT_ARENA && isNightBattle) ||

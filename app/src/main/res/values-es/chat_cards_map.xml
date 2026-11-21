@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="chat_card_map_attribution">© colaboradores de OpenStreetMap</string>
+    <string name="chat_card_map_close">Cerrar mapa</string>
+    <string name="chat_card_map_webview_crashed">La vista del mapa se detuvo. Ciérrala y ábrela de nuevo.</string>
+    <string name="chat_card_map_open_maps_app">Abrir en la app de mapas</string>
+    <string name="chat_card_map_no_maps_app">No se encontró ninguna app de mapas</string>
+    <string name="chat_card_map_loading">Cargando mapa…</string>
+    <string name="chat_card_map_offline">Mapa no disponible sin conexión. Se muestran solo los lugares.</string>
+    <string name="chat_card_map_unlocated">Ubicación no encontrada</string>
+    <string name="chat_card_map_preview_description">Vista previa del mapa. Toca para abrir el mapa completo.</string>
+    <string name="chat_card_map_expand">Ampliar</string>
+    <string name="chat_card_map_load_error">No se pudo cargar el mapa: %1$s</string>
+    <string name="chat_card_map_timeout">El mapa no se cargó. Aún puedes abrir los lugares en una app de mapas abajo.</string>
+</resources>

@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="worlds_runtime_joystick">Mover</string>
+    <string name="worlds_runtime_fly">Volar</string>
+    <string name="worlds_runtime_walk">Caminar</string>
+    <string name="worlds_runtime_up">Subir</string>
+    <string name="worlds_runtime_down">Bajar</string>
+    <string name="worlds_runtime_reset">Restablecer vista</string>
+    <string name="worlds_runtime_go_to">Lugares</string>
+    <string name="worlds_runtime_no_spots">No hay objetos con nombre en esta escena.</string>
+    <string name="worlds_runtime_error_title">Este mundo tuvo un problema</string>
+    <string name="worlds_runtime_truncated_hint">El código parece cortado. Pide al modelo que continúe o vuelve a generarlo.</string>
+    <string name="worlds_runtime_blank_hint">No se dibujó nada. El código puede estar incompleto o nunca llama a renderer.render(scene, camera).</string>
+    <string name="worlds_runtime_close_panel">Cerrar</string>
+    <string name="worlds_runtime_touch_controls">Controles táctiles</string>
+    <string name="worlds_runtime_three_missing">three.js no se cargó. La página puede necesitar una librería que no está incluida, o el código está incompleto.</string>
+    <string name="worlds_runtime_hint">Arrastra para mirar alrededor · Usa el joystick para moverte</string>
+    <string name="worlds_runtime_help">Ayuda de controles</string>
+</resources>

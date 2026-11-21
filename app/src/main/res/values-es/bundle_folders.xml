@@ -1,5 +1,6 @@
 <resources>
     <string name="bundle_folder_normal">Modelos normales</string>
+    <string name="bundle_folder_creators_3d">Creadores 3D y web</string>
     <string name="bundle_folder_vision">Modelos de visión</string>
     <string name="bundle_folder_speech">Modelos de voz</string>
     <string name="bundle_folder_music">Modelos de música</string>

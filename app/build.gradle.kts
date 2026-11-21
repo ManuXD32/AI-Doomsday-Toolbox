@@ -664,7 +664,8 @@ tasks.withType<Test>().configureEach {
         systemProperty("http.proxyPort", "9")
         systemProperty("https.proxyHost", "127.0.0.1")
         systemProperty("https.proxyPort", "9")
-        maxHeapSize = "6g"
+        // Overridable so release-time screenshot runs can stay within the host RAM budget.
+        maxHeapSize = (project.findProperty("adt.shots.maxHeap") as String?) ?: "6g"
         outputs.upToDateWhen { false }
         outputs.cacheIf { false }
         testLogging { showStandardStreams = true }

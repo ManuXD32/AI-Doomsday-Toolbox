@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="sd_dist_log_heartbeat_unavailable">Status port unavailable; the master may show this Helper as unverifiable, but it keeps serving.</string>
+</resources>

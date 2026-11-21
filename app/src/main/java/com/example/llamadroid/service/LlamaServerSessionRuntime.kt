@@ -411,7 +411,10 @@ class LlamaServerSessionRuntime(private val context: Context) {
             val config = profile.toLlamaConfig().copy(
                 port = profile.serverPort,
                 host = profile.host,
-                customFlags = profile.customFlags
+                customFlags = profile.customFlags,
+                chatTemplateFile = resolvePreservedChatTemplate(
+                    appContext, profile.modelPath, profile.reasoningPreserve
+                )
             )
             val runtimeWorkingDir = File(
                 appContext.filesDir,

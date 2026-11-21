@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="sd_r8_w01_unverifiable_log">El ayudante %1$s (%2$s) no respondió a la primera comprobación de actividad, así que no se puede supervisar durante esta ejecución.</string>
+</resources>

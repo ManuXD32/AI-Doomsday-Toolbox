@@ -4204,7 +4204,14 @@ object Migrations {
         NativeChatDelegationMigration.MIGRATION_128_129,
         ImageDescriptionMigration.MIGRATION_129_130,
         NativeChatStepsMigration.MIGRATION_130_131,
-        EasyModeMigration.MIGRATION_131_132
+        EasyModeMigration.MIGRATION_131_132,
+        SdTransferCompressionMigration.MIGRATION_132_133,
+        ChatCardStateMigration.MIGRATION_133_134,
+        TrainingBranchyMigration.MIGRATION_134_135,
+        BranchyClusterMigration.MIGRATION_135_136,
+        ModelLineageMigration.MIGRATION_136_137,
+        BranchyAltHostMigration.MIGRATION_137_138,
+        NetInterfacePrefMigration.MIGRATION_138_139
     )
     /**
      * Check if a column exists in a table.

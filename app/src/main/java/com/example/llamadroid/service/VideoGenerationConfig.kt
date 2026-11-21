@@ -381,6 +381,9 @@ data class GeneratedVideoMetadata(
         put("maxVramCpuGiB", maxVramCpuGiB)
         put("customFlags", customFlags)
         put("distributedEnabled", distributedRuntime.enabled)
+        put("distributedUsed", distributedRuntime.enabled && distributedRuntime.hasRpcServers)
+        put("rpcHelperCount", countSdRpcHelpers(distributedRuntime.rpcServers))
+        put("compressLayerTransfers", distributedRuntime.compressLayerTransfers)
         put("distributedRpcServers", distributedRuntime.rpcServers)
         put("distributedPlacementMode", distributedRuntime.placementMode.name)
         put("distributedBackendSpec", distributedRuntime.backendSpec)
@@ -502,7 +505,8 @@ data class GeneratedVideoMetadata(
                     splitMode = runCatching {
                         SdDistributedSplitMode.valueOf(json.optString("distributedSplitMode"))
                     }.getOrDefault(SdDistributedSplitMode.LAYER),
-                    customFlags = json.optString("distributedCustomFlags")
+                    customFlags = json.optString("distributedCustomFlags"),
+                    compressLayerTransfers = json.optBoolean("compressLayerTransfers", false)
                 ),
                 loras = json.optJSONArray("loras")?.toSdLoraSpecs().orEmpty(),
                 highNoiseLoras = json.optJSONArray("highNoiseLoras")?.toSdLoraSpecs().orEmpty(),

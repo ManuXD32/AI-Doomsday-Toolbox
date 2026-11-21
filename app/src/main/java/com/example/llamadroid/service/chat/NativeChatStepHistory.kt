@@ -45,7 +45,9 @@ object NativeChatStepHistory {
         withReasoning: Boolean = false,
         encodeImage: ((String) -> String?)? = null,
         /** Reasoning of the final answer round (the message's own `thinking` column), when replayed. */
-        finalThinking: String? = null
+        finalThinking: String? = null,
+        /** False when the current server cannot see images: replayed note pictures are dropped. */
+        serverSeesImages: Boolean = true
     ): List<OllamaService.ChatMessage> {
         val out = ArrayList<OllamaService.ChatMessage>()
         var carry = ""
@@ -59,11 +61,12 @@ object NativeChatStepHistory {
         }
         fun note(step: NativeChatStep) {
             flushCarry()
+            val dropImage = !serverSeesImages && step.imagePath != null
             out += OllamaService.ChatMessage(
                 role = step.role ?: "system",
-                content = step.text,
-                images = step.imagePath?.let { path -> encodeImage?.invoke(path) }?.let { listOf(it) },
-                imagePath = step.imagePath
+                content = if (dropImage) omitImage(step.text) else step.text,
+                images = if (dropImage) null else step.imagePath?.let { path -> encodeImage?.invoke(path) }?.let { listOf(it) },
+                imagePath = if (dropImage) null else step.imagePath
             )
         }
         for ((round, roundSteps) in roundsOf(steps)) {
@@ -126,6 +129,9 @@ object NativeChatStepHistory {
         encodeImage: ((String) -> String?)? = null
     ): List<OllamaService.ChatMessage> =
         expand("", NativeChatSteps(steps = steps), withReasoning = true, encodeImage = encodeImage) + listOfNotNull(prefill)
+
+    /** Replay text of a note whose picture is dropped. */
+    fun omitImage(text: String): String = if (text.isBlank()) ToolImageResults.IMAGE_OMITTED else "$text ${ToolImageResults.IMAGE_OMITTED}"
 
     /** "[Used tool name: first 200 chars of result]" lines (and round texts) before the final content. */
     fun flatten(content: String, steps: NativeChatSteps): String {

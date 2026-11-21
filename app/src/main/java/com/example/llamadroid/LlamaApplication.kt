@@ -73,6 +73,8 @@ class LlamaApplication : Application() {
         }
         container = DefaultAppContainer(this)
         UnifiedNotificationManager.init(this)
+        // Lets web search find the optional in-app SearXNG instance before the settings screen is opened.
+        runCatching { com.example.llamadroid.service.search.SearxngLocalInstance.register(this) }
         DebugLog.init(this)
         GenerationDiagnosticsStore.init(this)
         if (!isMainProcess()) {
@@ -84,7 +86,7 @@ class LlamaApplication : Application() {
         LlamaRuntimeStateProjection.registerMainProcess(this, LlamaService.mutableStateForProjection(), LlamaService.mutableServerLogsForProjection())
         PhoneWearGateway.start(this)
         installCrashBreadcrumbHandler()
-        CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
+        CoroutineScope(SupervisorJob() + Dispatchers.IO + com.example.llamadroid.util.startupExceptionHandler("APP_STARTUP")).launch {
             runCatching { GenerationQueueRepository(this@LlamaApplication).recoverOrphanedRun() }
                 .onFailure { DebugLog.log("[GENERATION_QUEUE] recovery failed: ${it.message}") }
             // A process death can leave the keyed OCR child alive.  Reconcile its metadata-only
@@ -101,16 +103,17 @@ class LlamaApplication : Application() {
                         DebugLog.log("[OCR] stale runtime recovery failed: ${error.message}")
                     }
                 )
-            runRemovedLlmTrainingCleanupOnce()
+            runCatching { runRemovedLlmTrainingCleanupOnce() }
             runCatching { com.example.llamadroid.tama.game.TamaWorldRemovalCleanup.runOnce(this@LlamaApplication) }
             // Resume an active paired visit (listener + link service) after a reboot or app kill.
             runCatching { com.example.llamadroid.tama.ui.transfer.TamaTransferHolder.get(this@LlamaApplication).recoverOnceAsync() }
                 .onFailure { DebugLog.log("[TAMA_TRANSFER] cold-start recovery failed: ${it.message}") }
             runCatching { com.example.llamadroid.data.repository.QuickSetupServerWatcher.ensureStarted(this@LlamaApplication) }
-            pruneLegacyPortableModelRows()
-            normalizeLegacyQuadtrixLoraRows()
-            installAgentRuntimeProfiles()
-            val staleJobs = AiRuntimeJobStore.markStaleActiveJobsTerminal(this@LlamaApplication)
+            runCatching { pruneLegacyPortableModelRows() }
+            runCatching { normalizeLegacyQuadtrixLoraRows() }
+            runCatching { installAgentRuntimeProfiles() }
+            val staleJobs = runCatching { AiRuntimeJobStore.markStaleActiveJobsTerminal(this@LlamaApplication) }
+                .getOrDefault(emptyList())
             runCatching {
                 GenerationDiagnosticsStore.recordBreadcrumb(
                     source = "llama_application",

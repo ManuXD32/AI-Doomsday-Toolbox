@@ -4,4 +4,5 @@
     <string name="saved_command_overwrite_message">Ya existe un comando llamado "%1$s". ¿Quieres reemplazarlo con la configuración actual?</string>
     <string name="saved_command_overwrite">Sobrescribir</string>
     <string name="saved_command_overwritten">Comando guardado actualizado</string>
+    <string name="saved_command_in_use_by_server">Este comando guardado lo usa un servidor. Elimina primero el servidor.</string>
 </resources>

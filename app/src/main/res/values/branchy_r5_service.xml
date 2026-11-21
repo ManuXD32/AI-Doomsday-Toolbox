@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="branchy_r5_notification_waiting_join">Waiting for helpers to connect…</string>
+</resources>

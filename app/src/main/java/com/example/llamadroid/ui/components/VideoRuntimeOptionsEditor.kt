@@ -19,6 +19,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.FilterChip
@@ -91,8 +92,6 @@ fun VideoRuntimeOptionsEditor(
     onHighNoiseLorasChange: (List<SdLoraSpec>) -> Unit = {},
     loraApplyMode: SdLoraApplyMode? = null,
     onLoraApplyModeChange: (SdLoraApplyMode?) -> Unit = {},
-    onApplyLingBot: (() -> Unit)? = null,
-    lingBotReady: Boolean = false,
     binaryCapabilities: SdBinaryCapabilities? = null,
     binaryProbePending: Boolean = binaryCapabilities == null,
     binaryProbeUnavailable: Boolean = false,
@@ -122,10 +121,6 @@ fun VideoRuntimeOptionsEditor(
         hasUnavailableLoras || hasUnavailableHighNoiseLoras || hasUnavailableApplyMode
 
     Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Text(
-            text = stringResource(R.string.video_controls_profile_title),
-            style = MaterialTheme.typography.titleMedium
-        )
         when {
             availability.binaryProbePending -> Text(
                 text = stringResource(R.string.video_controls_binary_checking),
@@ -175,26 +170,6 @@ fun VideoRuntimeOptionsEditor(
                 color = MaterialTheme.colorScheme.error
             )
         }
-        VideoFamilyChips(
-            selected = options.videoFamily,
-            enabled = availability.workflowEnabled,
-            onSelected = { family ->
-                val nextProfile = family?.let { SdVideoFamilyProfiles.resolve(it, null) }
-                val nextWorkflow = options.workflow?.takeIf { nextProfile?.supports(it) == true }
-                    ?: nextProfile?.supportedWorkflows?.firstOrNull()
-                onOptionsChange(options.copy(videoFamily = family, videoVariant = null, workflow = nextWorkflow,
-                    promptFormat = nextProfile?.promptFormat ?: SdVideoPromptFormat.PLAIN))
-            }
-        )
-        OutlinedTextField(
-            value = options.videoVariant.orEmpty(),
-            onValueChange = { value -> onOptionsChange(options.copy(videoVariant = value.trim().ifBlank { null })) },
-            modifier = Modifier.fillMaxWidth(),
-            label = { Text(stringResource(R.string.video_controls_profile_variant)) },
-            enabled = availability.workflowEnabled,
-            singleLine = true,
-            shape = RoundedCornerShape(12.dp)
-        )
         Text(
             text = stringResource(R.string.video_controls_workflow),
             style = MaterialTheme.typography.labelLarge
@@ -241,26 +216,6 @@ fun VideoRuntimeOptionsEditor(
                     )
             }
         }
-        if (onApplyLingBot != null) {
-            OutlinedButton(
-                onClick = onApplyLingBot,
-                enabled = lingBotReady && availability.lingBotPromptEnabled,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text(stringResource(R.string.video_controls_lingbot_apply))
-            }
-            Text(
-                text = stringResource(if (lingBotReady) R.string.video_controls_lingbot_ready else R.string.video_controls_lingbot_missing),
-                style = MaterialTheme.typography.bodySmall,
-                color = if (lingBotReady) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            Text(
-                text = stringResource(R.string.video_controls_lingbot_no_run),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
-
         if (hasUnavailableSelections) {
             Text(
                 text = stringResource(R.string.video_controls_unavailable_values_hint),
@@ -284,16 +239,6 @@ fun VideoRuntimeOptionsEditor(
             }
         }
 
-        ComponentPathsEditor(
-            profile = profile,
-            workflow = workflow,
-            paths = options.videoComponents,
-            models = componentModels,
-            availability = availability,
-            uncondDiffusionModels = uncondDiffusionModels,
-            ipAdapterModels = ipAdapterModels,
-            onPathsChange = { onOptionsChange(options.copy(videoComponents = it)) }
-        )
         VideoInputsEditor(
             profile = profile,
             workflow = workflow,
@@ -310,6 +255,34 @@ fun VideoRuntimeOptionsEditor(
             modifier = Modifier.fillMaxWidth().walkthroughTarget("video.advanced"),
             revealContent = requestedTarget == "video.loras"
         ) {
+            VideoFamilyOverride(
+                family = options.videoFamily,
+                variant = options.videoVariant,
+                enabled = availability.workflowEnabled,
+                onChange = { family, variant ->
+                    val nextProfile = family?.let { SdVideoFamilyProfiles.resolve(it, variant) }
+                    val nextWorkflow = options.workflow?.takeIf { nextProfile?.supports(it) == true }
+                        ?: nextProfile?.supportedWorkflows?.firstOrNull()
+                    onOptionsChange(
+                        options.copy(
+                            videoFamily = family,
+                            videoVariant = variant,
+                            workflow = nextWorkflow,
+                            promptFormat = nextProfile?.promptFormat ?: SdVideoPromptFormat.PLAIN
+                        )
+                    )
+                }
+            )
+            ComponentPathsEditor(
+                profile = profile,
+                workflow = workflow,
+                paths = options.videoComponents,
+                models = componentModels,
+                availability = availability,
+                uncondDiffusionModels = uncondDiffusionModels,
+                ipAdapterModels = ipAdapterModels,
+                onPathsChange = { onOptionsChange(options.copy(videoComponents = it)) }
+            )
             Text(
                 text = stringResource(R.string.video_controls_advanced_hint),
                 style = MaterialTheme.typography.bodySmall,
@@ -345,37 +318,67 @@ fun VideoRuntimeOptionsEditor(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun VideoFamilyChips(
-    selected: SdVideoFamily?,
+private fun VideoFamilyOverride(
+    family: SdVideoFamily?,
+    variant: String?,
     enabled: Boolean,
-    onSelected: (SdVideoFamily?) -> Unit
+    onChange: (SdVideoFamily?, String?) -> Unit
 ) {
-    val walkthroughTargets = LocalWalkthroughTargets.current
-    LazyRow(
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        modifier = Modifier.fillMaxWidth().walkthroughTarget("video.profile")
+    var expanded by remember { mutableStateOf(false) }
+    val automatic = stringResource(R.string.sd_r8_w06_family_automatic)
+    val familyChoices = listOf<SdVideoFamily?>(null) + SdVideoFamilyProfiles.all.map { it.family }
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        item {
-            FilterChip(
-                selected = selected == null,
+        ExposedDropdownMenuBox(
+            expanded = expanded,
+            onExpandedChange = { if (enabled) expanded = !expanded }
+        ) {
+            OutlinedTextField(
+                value = family?.let { videoFamilyLabel(it) } ?: automatic,
+                onValueChange = {},
+                readOnly = true,
+                modifier = Modifier.fillMaxWidth().menuAnchor(androidx.compose.material3.ExposedDropdownMenuAnchorType.PrimaryNotEditable),
+                label = { Text(stringResource(R.string.sd_r8_w06_family_override), maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
                 enabled = enabled,
-                onClick = {
-                    onSelected(null)
-                    walkthroughTargets?.recordEvent("video.profile")
-                },
-                label = { Text(stringResource(R.string.video_runtime_custom_profile)) }
+                singleLine = true,
+                shape = RoundedCornerShape(12.dp)
             )
+            ExposedDropdownMenu(
+                expanded = expanded,
+                onDismissRequest = { expanded = false },
+                modifier = Modifier.heightIn(max = 320.dp)
+            ) {
+                familyChoices.forEach { choice ->
+                    DropdownMenuItem(
+                        text = {
+                            Text(
+                                choice?.let { videoFamilyLabel(it) } ?: automatic,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        },
+                        onClick = {
+                            expanded = false
+                            onChange(choice, null)
+                        }
+                    )
+                }
+            }
         }
-        items(SdVideoFamilyProfiles.all, key = { it.family.name }) { profile ->
-            FilterChip(
-                selected = selected == profile.family,
+        if (family != null) {
+            OutlinedTextField(
+                value = variant.orEmpty(),
+                onValueChange = { value -> onChange(family, value.trim().ifBlank { null }) },
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text(stringResource(R.string.video_controls_profile_variant)) },
                 enabled = enabled,
-                onClick = {
-                    onSelected(profile.family)
-                    walkthroughTargets?.recordEvent("video.profile")
-                },
-                label = { Text(videoFamilyLabel(profile.family), maxLines = 1) }
+                singleLine = true,
+                shape = RoundedCornerShape(12.dp)
             )
         }
     }
@@ -1104,7 +1107,7 @@ private fun <T> List<T>.swap(first: Int, second: Int): List<T> = toMutableList()
 }
 
 @Composable
-private fun videoFamilyLabel(family: SdVideoFamily): String = stringResource(
+internal fun videoFamilyLabel(family: SdVideoFamily): String = stringResource(
     when (family) {
         SdVideoFamily.WAN -> R.string.video_runtime_family_wan
         SdVideoFamily.HUNYUAN_VIDEO -> R.string.video_runtime_family_hunyuan_video

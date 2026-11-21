@@ -105,7 +105,10 @@ internal fun easyChatTools(webSearch: Boolean = false): NativeChatToolConfig =
 /** Easy chat API params: the server's seeded params (audio etc.) with the tool keys forced to [easyChatTools]. */
 internal fun easyChatApiParams(serverParams: String?, webSearch: Boolean = false): String {
     val json = runCatching { serverParams?.let(::JSONObject) }.getOrNull() ?: JSONObject()
+    // Keep an explicit cards value (server defaults or the global new-chat default) over the Easy overlay.
+    val cards = json.opt(NativeChatToolConfig.KEY_CARDS_ENABLED)
     easyChatTools(webSearch).toParamMap().forEach { (key, value) -> json.put(key, value) }
+    if (cards != null) json.put(NativeChatToolConfig.KEY_CARDS_ENABLED, cards)
     return json.toString()
 }
 
@@ -322,7 +325,8 @@ class EasyLlamaChatCoordinator(
                             serverId = linked.server.id,
                             persistKvCache = easy,
                             easyMode = easy,
-                            apiParams = newChatApiParamsForServer(linked.server).let { if (easy) easyChatApiParams(it) else it }))
+                            apiParams = com.example.llamadroid.chat.cards.ChatCardsDefaults.applyToNewChatParams(
+                                context, newChatApiParamsForServer(linked.server)).let { if (easy) easyChatApiParams(it) else it }))
                         database.llamaServerDao().updateLastUsed(linked.server.id)
                         EasyLlamaChatSession(chatId, linked.server.id)
                     }

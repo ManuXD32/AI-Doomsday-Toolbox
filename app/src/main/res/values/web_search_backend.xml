@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="web_search_backend_title">Web search</string>
+    <string name="web_search_backend_desc">Which search engine the web_search tool uses in chats and in the Harness. SearXNG is tried first when selected; DuckDuckGo is the fallback.</string>
+    <string name="web_search_backend_duckduckgo">DuckDuckGo (default)</string>
+    <string name="web_search_backend_searxng">SearXNG</string>
+    <string name="web_search_backend_url_label">SearXNG address</string>
+    <string name="web_search_backend_url_hint">https://searx.example.org</string>
+    <string name="web_search_backend_url_help">Leave empty to use the in-app SearXNG instance when it is installed. The instance must allow format=json.</string>
+    <string name="web_search_backend_url_invalid">Enter a valid http:// or https:// address.</string>
+    <string name="web_search_backend_test">Test search</string>
+    <string name="web_search_backend_testing">Testing…</string>
+    <string name="web_search_backend_test_ok">The search worked. Results: %1$d</string>
+    <string name="web_search_backend_test_empty">The search answered but returned no results.</string>
+    <string name="web_search_backend_test_failed">The search failed: %1$s</string>
+    <string name="web_search_backend_test_elapsed">Time (ms): %1$d</string>
+    <string name="web_search_backend_test_failing">Engines that did not answer:</string>
+    <string name="web_search_backend_test_engine_line">- %1$s: %2$s</string>
+    <string name="web_search_backend_chat_link">Search engine: %1$s. Change it in Settings, General, Web search.</string>
+</resources>

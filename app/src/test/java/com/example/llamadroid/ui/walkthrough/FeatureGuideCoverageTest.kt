@@ -49,6 +49,8 @@ class FeatureGuideCoverageTest {
                 base(Screen.SdDistributedHub.route),
                 base(Screen.SdDistributedWorker.route),
                 base(Screen.SdDistributedMaster.route),
+                base(Screen.SdDistributedImages.route),
+                base(Screen.SdDistributedVideo.route),
                 base(Screen.SdDistributedNetwork.route),
                 base(Screen.SdDistributedRunConfig.route),
                 base(Screen.SdDistributedGallery.route)

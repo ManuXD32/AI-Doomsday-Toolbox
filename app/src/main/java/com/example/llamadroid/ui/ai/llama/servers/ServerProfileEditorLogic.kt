@@ -2,6 +2,7 @@ package com.example.llamadroid.ui.ai.llama.servers
 
 import com.example.llamadroid.service.LlamaServerLaunchProfile
 import com.google.gson.Gson
+import com.google.gson.JsonParser
 
 /** Draft preferences file backing the full-screen server profile editor (isolated from global settings). */
 internal const val SERVER_PROFILE_DRAFT_PREFS = "llm_server_profile_draft"
@@ -56,6 +57,29 @@ fun profileForSave(captured: LlamaServerLaunchProfile, requestedPort: Int?): Lla
 /** Stable text form of a profile, used to detect unsaved edits. */
 fun profileFingerprint(profile: LlamaServerLaunchProfile): String = Gson().toJson(profile)
 
+/**
+ * Applies only the fields the user changed in the editor ([edited] vs the [baselineJson] fingerprint taken right after
+ * seeding) onto the profile [stored] in the database now. Untouched fields keep their stored values, including fields
+ * the draft settings store does not carry, and values another flow wrote while the editor was open.
+ * Gson drops null fields, so a key present in the baseline but missing from [edited] means the user cleared it.
+ */
+fun mergeEditedProfile(
+    stored: LlamaServerLaunchProfile,
+    baselineJson: String,
+    edited: LlamaServerLaunchProfile
+): LlamaServerLaunchProfile {
+    val gson = Gson()
+    val baseline = runCatching { JsonParser.parseString(baselineJson).asJsonObject }.getOrNull() ?: return edited
+    val editedTree = gson.toJsonTree(edited).asJsonObject
+    val merged = gson.toJsonTree(stored).asJsonObject
+    for (key in baseline.keySet() + editedTree.keySet()) {
+        val value = editedTree.get(key)
+        if (value == baseline.get(key)) continue
+        if (value == null) merged.remove(key) else merged.add(key, value)
+    }
+    return gson.fromJson(merged, LlamaServerLaunchProfile::class.java)
+}
+
 /** Name suggested for a new server: the model file name unless the user typed their own. */
 fun suggestedServerName(currentName: String, nameTouched: Boolean, modelPath: String): String =
     if (nameTouched && currentName.isNotBlank()) currentName else defaultServerName(modelPath)
@@ -93,7 +117,8 @@ internal suspend fun createChatForNewServer(context: android.content.Context, ro
         val chatId = repository.createChat(
             title = title,
             contextSize = 0,
-            apiParams = com.example.llamadroid.ui.ai.llama.chatlist.newChatApiParamsForServer(entity),
+            apiParams = com.example.llamadroid.chat.cards.ChatCardsDefaults.applyToNewChatParams(
+                context, com.example.llamadroid.ui.ai.llama.chatlist.newChatApiParamsForServer(entity)),
             serverId = rowId,
             persistKvCache = com.example.llamadroid.ui.ai.llama.chatlist.defaultPersistKvCacheForServer(entity)
         )

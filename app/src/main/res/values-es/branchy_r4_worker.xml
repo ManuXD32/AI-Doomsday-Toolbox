@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="branchy_r4_tab_train">Entrenar</string>
+    <string name="branchy_r4_tab_worker">Ser trabajador</string>
+    <string name="branchy_r4_worker_status_waiting">Esperando al maestro…</string>
+    <string name="branchy_r4_worker_status_connected">Conectado a un maestro</string>
+    <string name="branchy_r4_worker_threads">Hilos de cálculo: %1$d</string>
+</resources>

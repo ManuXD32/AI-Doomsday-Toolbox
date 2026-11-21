@@ -57,5 +57,4 @@
     <string name="video_runtime_reference_audio_mismatch">Each reference video audio track needs a matching reference video.</string>
     <string name="video_runtime_minimax_reference_keyframe_conflict">MiniMax reference images, frame directories, or audio cannot be combined with first or last keyframes. Clear the reference inputs or the keyframes and try again.</string>
     <string name="video_runtime_minimax_control_video_unsupported">The pinned MiniMax backend does not implement control-video frames. Clear the control-video input before starting this family.</string>
-    <string name="video_runtime_custom_profile">Custom video profile</string>
 </resources>

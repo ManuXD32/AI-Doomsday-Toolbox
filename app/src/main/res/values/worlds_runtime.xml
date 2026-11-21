@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="worlds_runtime_joystick">Move</string>
+    <string name="worlds_runtime_fly">Fly</string>
+    <string name="worlds_runtime_walk">Walk</string>
+    <string name="worlds_runtime_up">Up</string>
+    <string name="worlds_runtime_down">Down</string>
+    <string name="worlds_runtime_reset">Reset view</string>
+    <string name="worlds_runtime_go_to">Places</string>
+    <string name="worlds_runtime_no_spots">No named objects in this scene.</string>
+    <string name="worlds_runtime_error_title">This world had a problem</string>
+    <string name="worlds_runtime_truncated_hint">The code looks cut off. Ask the model to continue or regenerate it.</string>
+    <string name="worlds_runtime_blank_hint">Nothing was drawn. The code may be incomplete or never calls renderer.render(scene, camera).</string>
+    <string name="worlds_runtime_close_panel">Close</string>
+    <string name="worlds_runtime_touch_controls">Touch controls</string>
+    <string name="worlds_runtime_three_missing">three.js did not load. The page may need a library that is not bundled, or the code is incomplete.</string>
+    <string name="worlds_runtime_hint">Drag anywhere to look around · Use the stick to move</string>
+    <string name="worlds_runtime_help">Controls help</string>
+</resources>

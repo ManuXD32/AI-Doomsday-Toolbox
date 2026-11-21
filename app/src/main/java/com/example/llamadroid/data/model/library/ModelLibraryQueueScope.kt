@@ -16,7 +16,7 @@ import kotlinx.coroutines.launch
  * recovery still cover a process death.
  */
 object ModelLibraryQueueScope {
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO + com.example.llamadroid.util.startupExceptionHandler("MODEL_QUEUE"))
     private val lock = Any()
     private val active = mutableMapOf<String, Job>()
 

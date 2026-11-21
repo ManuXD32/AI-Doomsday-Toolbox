@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="branchy_r5_helper_online">En línea</string>
+    <string name="branchy_r5_helper_online_rtt">En línea · %1$d ms</string>
+    <string name="branchy_r5_helper_unreachable">Sin conexión</string>
+    <string name="branchy_r5_helper_checking">Comprobando…</string>
+    <string name="branchy_r5_vpn_hint">En una VPN, añade los ayudantes por dirección.</string>
+</resources>

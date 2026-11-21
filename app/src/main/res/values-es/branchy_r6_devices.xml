@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="branchy_r6_unused_prefix">No recibe trabajo: %1$s</string>
+    <string name="branchy_r6_unused_no_branch">No quedan ramas (ramas del modelo: %1$d)</string>
+    <string name="branchy_r6_unused_ram">No tiene suficiente RAM libre</string>
+    <string name="branchy_r6_unused_slower">Es más lento que los demás</string>
+    <string name="branchy_r6_unused_dp_not_fit">No cabe el modelo completo (datos en paralelo)</string>
+    <string name="branchy_r6_unused_other">No hace falta para este plan</string>
+    <string name="branchy_r6_helper_threads_own">Su propio ajuste</string>
+    <string name="branchy_r6_helper_threads_reset">Usar el suyo</string>
+    <string name="branchy_r6_checkpoint_title">Puntos de control</string>
+    <string name="branchy_r6_checkpoint_hint">Cada cuánto guarda el entrenamiento un punto de control. Déjalo vacío para usar el valor del planificador.</string>
+    <string name="branchy_r6_checkpoint_label">Guardar un punto de control cada N pasos</string>
+    <string name="branchy_r6_checkpoint_default">Por defecto: %1$d</string>
+    <string name="branchy_r6_checkpoint_default_unknown">Valor del planificador</string>
+</resources>

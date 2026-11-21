@@ -47,8 +47,11 @@ object NativeModuleCatalog {
         "libmtmd_${tier}.so",
         "libwhisper-cli_${tier}.so",
         "libllama-bench_${tier}.so",
+        "libllama-quantize_${tier}.so",
+        "libllama-branchy-helper_${tier}.so",
         "libllama-tts_${tier}.so",
-        "libquadtrix_trainer_${tier}.so"
+        "libquadtrix_trainer_${tier}.so",
+        "libbranchy_trainer_${tier}.so"
     )
 
     private fun mediaCpuPayload(tier: String) = setOf(

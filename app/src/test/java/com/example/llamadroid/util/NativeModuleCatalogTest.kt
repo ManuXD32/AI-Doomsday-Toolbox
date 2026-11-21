@@ -45,8 +45,11 @@ class NativeModuleCatalogTest {
         val llm = NativeModuleCatalog.require("feature_llm_i8mm")
         assertTrue("librpc-server_i8mm.so" in llm.expectedFiles)
         assertTrue("libllama-tts_i8mm.so" in llm.expectedFiles)
+        assertTrue("libllama-quantize_i8mm.so" in llm.expectedFiles)
+        assertTrue("libllama-branchy-helper_i8mm.so" in llm.expectedFiles)
         assertTrue("libwhisper-cli_i8mm.so" in llm.expectedFiles)
         assertTrue("libquadtrix_trainer_i8mm.so" in llm.expectedFiles)
+        assertTrue("libbranchy_trainer_i8mm.so" in llm.expectedFiles)
         assertFalse("libggml.so" in llm.expectedFiles)
 
         val media = NativeModuleCatalog.require("feature_media_dotprod")

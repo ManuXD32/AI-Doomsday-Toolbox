@@ -103,12 +103,15 @@ object WakeLockManager {
             if (wifiLock == null) {
                 val wifiManager = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as android.net.wifi.WifiManager
 
-                // Keep the chosen mode explicit in one place instead of branching to identical code paths.
+                // LOW_LATENCY (API 29+) keeps the radio responsive for per-token RPC round trips,
+                // but only while the app is in the foreground; HIGH_PERF is the fallback.
                 @Suppress("DEPRECATION")
-                wifiLock = wifiManager.createWifiLock(
-                    android.net.wifi.WifiManager.WIFI_MODE_FULL_HIGH_PERF,
-                    "LlamaDroid:AppWifiLock"
-                )
+                val mode = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                    android.net.wifi.WifiManager.WIFI_MODE_FULL_LOW_LATENCY
+                } else {
+                    android.net.wifi.WifiManager.WIFI_MODE_FULL_HIGH_PERF
+                }
+                wifiLock = wifiManager.createWifiLock(mode, "LlamaDroid:AppWifiLock")
                 wifiLock?.setReferenceCounted(false)
             }
             

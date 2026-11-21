@@ -57,5 +57,4 @@
     <string name="video_runtime_reference_audio_mismatch">Cada pista de audio de referencia necesita un video de referencia correspondiente.</string>
     <string name="video_runtime_minimax_reference_keyframe_conflict">Las referencias de MiniMax (imágenes, carpetas de fotogramas o audio) no se pueden combinar con el primer o último fotograma. Borra las referencias o los fotogramas e inténtalo de nuevo.</string>
     <string name="video_runtime_minimax_control_video_unsupported">El backend de MiniMax incluido no implementa fotogramas de video de control. Borra la entrada de video de control antes de iniciar esta familia.</string>
-    <string name="video_runtime_custom_profile">Perfil de video personalizado</string>
 </resources>

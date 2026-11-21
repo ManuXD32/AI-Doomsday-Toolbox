@@ -1,0 +1,10 @@
+<resources>
+    <string name="embedding_bundle_gemma_title">EmbeddingGemma 300M</string>
+    <string name="embedding_bundle_gemma_desc">Modelo de embeddings multilingüe para la base de conocimiento y la búsqueda de documentos. Unos 334 MB, licencia Gemma. La mejor opción por defecto para inglés y español. Cambiar de modelo de embeddings más adelante obliga a reindexar tus documentos.</string>
+    <string name="embedding_bundle_qwen_title">Qwen3 Embedding 0.6B</string>
+    <string name="embedding_bundle_qwen_desc">Modelo de embeddings multilingüe potente (más de 100 idiomas), vectores de 1024 dimensiones. Unos 639 MB, Apache-2.0. Más lento que EmbeddingGemma en el teléfono. Cambiar de modelo de embeddings más adelante obliga a reindexar tus documentos.</string>
+    <string name="embedding_bundle_nomic_title">Nomic Embed Text v1.5</string>
+    <string name="embedding_bundle_nomic_desc">Modelo de embeddings pequeño y rápido, centrado en inglés. Unos 84 MB, Apache-2.0. Rinde peor en español y otros idiomas. Cambiar de modelo de embeddings más adelante obliga a reindexar tus documentos.</string>
+    <string name="embedding_bundle_capability">Búsqueda de documentos</string>
+    <string name="bundle_folder_embeddings">Modelos de embeddings</string>
+</resources>

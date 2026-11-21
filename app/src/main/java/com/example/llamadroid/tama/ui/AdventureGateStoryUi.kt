@@ -325,7 +325,7 @@ internal fun BoxScope.AdventureGateStoryOverlay(
     val progressFlow: Flow<List<AdventureGateWorldProgress>?> = remember(petId, repository) {
         if (petId == null) flowOf(null) else repository.observeProgress(petId)
     }
-    val progress by progressFlow.collectAsState(initial = null)
+    val progress: List<AdventureGateWorldProgress>? by progressFlow.collectAsState(initial = null)
     var seen by remember(petId) { mutableStateOf<Set<String>?>(null) }
 
     LaunchedEffect(petId, progress != null) {

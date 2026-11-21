@@ -388,14 +388,16 @@ class BenchmarkService(context: Context) {
             )
             
         } catch (e: Exception) {
-            DebugLog.log("Benchmark error: ${e.message}")
+            // Cancelling destroys the process under the reader; report it as a cancel, not an I/O error.
+            val cancelledRead = isCancelled && e is java.io.IOException
+            DebugLog.log(if (cancelledRead) "Benchmark: read stopped after cancel" else "Benchmark error: ${e.message}")
             SingleResult(
                 threads = threads,
                 promptTokensPerSecond = 0f,
                 genTokensPerSecond = 0f,
                 totalTimeMs = System.currentTimeMillis() - startTime,
                 success = false,
-                error = e.message
+                error = if (cancelledRead) "Cancelled" else e.message
             )
         }
     }

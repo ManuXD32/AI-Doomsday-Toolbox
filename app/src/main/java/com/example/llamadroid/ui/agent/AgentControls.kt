@@ -1074,107 +1074,107 @@ fun AgentContextWindowBanner(
             }
 
             if (!expanded) {
-                return@Column
-            }
+            } else {
 
-            Spacer(modifier = Modifier.height(6.dp))
-            LinearProgressIndicator(
-                progress = { progress },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(6.dp),
-                color = contentColor,
-                trackColor = contentColor.copy(alpha = 0.22f)
-            )
-            Spacer(modifier = Modifier.height(6.dp))
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(max = 168.dp)
-                    .verticalScroll(detailScrollState)
-            ) {
-                Text(
-                    text = detailText,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = contentColor.copy(alpha = 0.88f)
+                Spacer(modifier = Modifier.height(6.dp))
+                LinearProgressIndicator(
+                    progress = { progress },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(6.dp),
+                    color = contentColor,
+                    trackColor = contentColor.copy(alpha = 0.22f)
                 )
-                snapshot.actualPromptTokens?.let { actualPromptTokens ->
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        text = stringResource(
-                            R.string.agent_context_usage_actual_detail,
-                            actualPromptTokens,
-                            snapshot.actualCompletionTokens?.toString() ?: "?",
-                            snapshot.actualTotalTokens?.toString() ?: "?"
-                        ),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = contentColor.copy(alpha = 0.88f)
-                    )
-                }
-                if (
-                    snapshot.maximumInputTokens != null &&
-                    snapshot.safetyReserveTokens != null &&
-                    snapshot.effectiveOutputTokens != null
+                Spacer(modifier = Modifier.height(6.dp))
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 168.dp)
+                        .verticalScroll(detailScrollState)
                 ) {
-                    Spacer(modifier = Modifier.height(4.dp))
                     Text(
-                        text = stringResource(
-                            R.string.agent_context_budget_breakdown,
-                            snapshot.packedEstimatedTokens,
-                            snapshot.rawToolSchemaTokens,
-                            snapshot.actualPromptTokens
-                                ?: snapshot.calibratedRequestTokens
-                                ?: snapshot.packedEstimatedTokens,
-                            snapshot.maximumInputTokens,
-                            snapshot.effectiveOutputTokens,
-                            snapshot.safetyReserveTokens,
-                            snapshot.countSource ?: "estimate"
-                        ),
+                        text = detailText,
                         style = MaterialTheme.typography.bodySmall,
                         color = contentColor.copy(alpha = 0.88f)
                     )
-                }
-                if (snapshot.backend != null && snapshot.model != null && snapshot.calibrationFactor != null) {
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = stringResource(
-                            R.string.agent_context_usage_calibration_detail,
-                            snapshot.backend,
-                            snapshot.model,
-                            String.format(Locale.US, "%.2f", snapshot.calibrationFactor)
-                        ),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = contentColor.copy(alpha = 0.88f)
-                    )
-                }
-                Spacer(modifier = Modifier.height(8.dp))
-                Text(
-                    text = stringResource(R.string.agent_context_usage_history_title),
-                    style = MaterialTheme.typography.labelMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    color = contentColor
-                )
-                Spacer(modifier = Modifier.height(4.dp))
-                if (snapshot.recentCompactions.isEmpty()) {
-                    Text(
-                        text = stringResource(R.string.agent_context_usage_history_empty),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = contentColor.copy(alpha = 0.82f)
-                    )
-                } else {
-                    snapshot.recentCompactions.forEach { event ->
+                    snapshot.actualPromptTokens?.let { actualPromptTokens ->
+                        Spacer(modifier = Modifier.height(8.dp))
                         Text(
                             text = stringResource(
-                                R.string.agent_context_usage_history_item_verbose,
-                                timeFormatter.format(Date(event.timestamp)),
-                                event.rawEstimatedTokens,
-                                event.packedEstimatedTokens,
-                                event.omittedCount,
-                                event.compactionPasses
+                                R.string.agent_context_usage_actual_detail,
+                                actualPromptTokens,
+                                snapshot.actualCompletionTokens?.toString() ?: "?",
+                                snapshot.actualTotalTokens?.toString() ?: "?"
                             ),
                             style = MaterialTheme.typography.bodySmall,
                             color = contentColor.copy(alpha = 0.88f)
                         )
+                    }
+                    if (
+                        snapshot.maximumInputTokens != null &&
+                        snapshot.safetyReserveTokens != null &&
+                        snapshot.effectiveOutputTokens != null
+                    ) {
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = stringResource(
+                                R.string.agent_context_budget_breakdown,
+                                snapshot.packedEstimatedTokens,
+                                snapshot.rawToolSchemaTokens,
+                                snapshot.actualPromptTokens
+                                    ?: snapshot.calibratedRequestTokens
+                                    ?: snapshot.packedEstimatedTokens,
+                                snapshot.maximumInputTokens,
+                                snapshot.effectiveOutputTokens,
+                                snapshot.safetyReserveTokens,
+                                snapshot.countSource ?: "estimate"
+                            ),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = contentColor.copy(alpha = 0.88f)
+                        )
+                    }
+                    if (snapshot.backend != null && snapshot.model != null && snapshot.calibrationFactor != null) {
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = stringResource(
+                                R.string.agent_context_usage_calibration_detail,
+                                snapshot.backend,
+                                snapshot.model,
+                                String.format(Locale.US, "%.2f", snapshot.calibrationFactor)
+                            ),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = contentColor.copy(alpha = 0.88f)
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = stringResource(R.string.agent_context_usage_history_title),
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = contentColor
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    if (snapshot.recentCompactions.isEmpty()) {
+                        Text(
+                            text = stringResource(R.string.agent_context_usage_history_empty),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = contentColor.copy(alpha = 0.82f)
+                        )
+                    } else {
+                        snapshot.recentCompactions.forEach { event ->
+                            Text(
+                                text = stringResource(
+                                    R.string.agent_context_usage_history_item_verbose,
+                                    timeFormatter.format(Date(event.timestamp)),
+                                    event.rawEstimatedTokens,
+                                    event.packedEstimatedTokens,
+                                    event.omittedCount,
+                                    event.compactionPasses
+                                ),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = contentColor.copy(alpha = 0.88f)
+                            )
+                        }
                     }
                 }
             }

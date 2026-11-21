@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="model_quantize_action">Quantize…</string>
+    <string name="model_quantize_title">Quantize model</string>
+    <string name="model_quantize_source">Source: %1$s (%2$s)</string>
+    <string name="model_quantize_type_label">Target type</string>
+    <string name="model_quantize_q8_0">Q8_0 (recommended): near-lossless, about half of F16</string>
+    <string name="model_quantize_q4_k_m">Q4_K_M: good quality, about a quarter of F16</string>
+    <string name="model_quantize_q4_0">Q4_0: smallest and fastest, lowest quality</string>
+    <string name="model_quantize_estimate">Estimated size: %1$s. Output: %2$s</string>
+    <string name="model_quantize_requantize_warning">This file already looks quantized. Requantizing a quantized model loses quality; prefer quantizing from an F16 or BF16 file.</string>
+    <string name="model_quantize_start">Quantize</string>
+    <string name="model_quantize_progress">Quantizing tensor %1$d of %2$d</string>
+    <string name="model_quantize_preparing">Starting…</string>
+    <string name="model_quantize_done">Done. The quantized model was added to your local models: %1$s</string>
+    <string name="model_quantize_register_failed">The file was created but could not be added to the model list: %1$s</string>
+    <string name="model_quantize_fail_no_binary">The quantizer is not installed. Install the LLM module for your CPU tier and try again.</string>
+    <string name="model_quantize_fail_no_space">Not enough free storage. About %1$s are needed next to the source file.</string>
+    <string name="model_quantize_fail_exit">Quantization failed: %1$s</string>
+    <string name="model_quantize_fail_cancelled">Quantization was cancelled.</string>
+
+    <string name="branchy_export_title">Export to GGUF</string>
+    <string name="branchy_export_hint">Converts the latest checkpoint to a GGUF file for llama.cpp, saved in this run\'s export folder and added to your local models.</string>
+    <string name="branchy_export_type_label">Weight type</string>
+    <string name="branchy_export_type_auto">Auto</string>
+    <string name="branchy_export_type_f16">F16</string>
+    <string name="branchy_export_type_q8_0">Q8_0</string>
+    <string name="branchy_export_type_q4_0">Q4_0</string>
+    <string name="branchy_export_start">Export to GGUF</string>
+    <string name="branchy_export_running">Exporting…</string>
+    <string name="branchy_export_done">Exported and added to local models: %1$s</string>
+    <string name="branchy_export_failed">Export failed: %1$s</string>
+    <string name="branchy_export_no_checkpoint">No checkpoint yet. Train for a while first.</string>
+    <string name="branchy_export_no_binary">The Branchy trainer is not installed.</string>
+    <string name="branchy_export_open_chat">Open in chat</string>
+    <string name="branchy_export_benchmark">Benchmark</string>
+</resources>

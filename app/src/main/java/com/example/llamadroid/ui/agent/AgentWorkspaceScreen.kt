@@ -174,12 +174,12 @@ fun AgentWorkspaceScreen(navController: NavController, filesOnly: Boolean = fals
         workspaceConversationAnchor?.let(db.agentChatDao()::observeConversation)
             ?: kotlinx.coroutines.flow.flowOf(null)
     }
-    val workspaceConversation by workspaceConversationFlow.collectAsState(initial = null)
+    val workspaceConversation: com.example.llamadroid.data.db.AgentConversationEntity? by workspaceConversationFlow.collectAsState(initial = null)
     val prootEnvironmentFlow = remember(workspaceConversation?.prootEnvironmentId) {
         workspaceConversation?.prootEnvironmentId?.let(db.agentProotEnvironmentDao()::observeById)
             ?: kotlinx.coroutines.flow.flowOf(null)
     }
-    val prootEnvironment by prootEnvironmentFlow.collectAsState(initial = null)
+    val prootEnvironment: com.example.llamadroid.data.db.AgentProotEnvironmentEntity? by prootEnvironmentFlow.collectAsState(initial = null)
     val resolvedProjectRoot = remember(workspaceConversationAnchor, currentProjectFolder, workspaceBackend) {
         resolveWorkspaceProjectRoot(workspaceConversationAnchor, currentProjectFolder, workspaceBackend)
     }
@@ -2705,6 +2705,11 @@ private fun AgentWorkspacePreviewTab(
                                         super.onPageStarted(view, url, favicon)
                                     }
 
+                                    override fun onRenderProcessGone(
+                                        view: WebView?,
+                                        detail: android.webkit.RenderProcessGoneDetail?
+                                    ): Boolean = true // keep the app alive; onRelease destroys the dead view
+
                                     override fun onPageFinished(view: WebView?, url: String?) {
                                         super.onPageFinished(view, url)
                                         if (view != null && url != null && isAllowedAgentPreviewUrl(url, origin)) {
@@ -2771,7 +2776,7 @@ fun AgentInvocationDetailScreen(
     val context = LocalContext.current
     val db = remember(context) { AppDatabase.getDatabase(context.applicationContext) }
     val invocationFlow = remember(invocationId) { db.agentWorkflowDao().observeInvocation(invocationId) }
-    val invocation by invocationFlow.collectAsState(initial = null)
+    val invocation: com.example.llamadroid.data.db.AgentInvocationEntity? by invocationFlow.collectAsState(initial = null)
     val messageFlow = remember(invocationId) { db.agentChatDao().observeMessagesForInvocation(invocationId) }
     val messages by messageFlow.collectAsState(initial = emptyList())
     val liveMessages by AgentService.messages.collectAsState()

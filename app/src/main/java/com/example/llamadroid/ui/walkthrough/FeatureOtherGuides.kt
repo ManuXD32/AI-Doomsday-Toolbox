@@ -403,7 +403,7 @@ internal object FeatureOtherGuides {
             id = "media_runtime",
             titleRes = R.string.feature_guide_media_runtime_title,
             route = "sd_distributed",
-            routeBases = setOf("sd_distributed", "sd_distributed_worker", "sd_distributed_master", "sd_distributed_network", "sd_distributed_run_config", "sd_distributed_gallery"),
+            routeBases = setOf("sd_distributed", "sd_distributed_worker", "sd_distributed_master", "sd_distributed_images", "sd_distributed_video", "sd_distributed_network", "sd_distributed_run_config", "sd_distributed_gallery"),
             recipes = listOf(
                 otherRecipe(
                     id = "media_runtime.roles",

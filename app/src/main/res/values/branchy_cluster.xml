@@ -1,0 +1,89 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="branchy_cluster_notification_channel">Branchy helper</string>
+    <string name="branchy_cluster_notification_title">Branchy helper</string>
+    <string name="branchy_cluster_notification_starting">Starting the helper…</string>
+    <string name="branchy_cluster_notification_running">Helping train on port %1$d</string>
+    <string name="branchy_cluster_action_stop">Stop</string>
+
+    <string name="branchy_cluster_log_no_token">No cluster token is set. Enter the token shown on the main device first.</string>
+    <string name="branchy_cluster_log_no_binary">The Branchy trainer binary was not found.</string>
+    <string name="branchy_cluster_log_benchmarking">Measuring this device\'s speed…</string>
+    <string name="branchy_cluster_log_benchmark_done">Speed: %1$.1f GFLOP/s</string>
+    <string name="branchy_cluster_log_starting">Starting the worker on port %1$d (threads: %2$d)</string>
+    <string name="branchy_cluster_log_stopped">The helper stopped (exit code %1$d)</string>
+    <string name="branchy_cluster_log_failed">The helper failed: %1$s</string>
+    <string name="branchy_cluster_log_heartbeat_busy">Port %1$d is busy, so the main device cannot check that this helper is alive.</string>
+
+    <string name="branchy_cluster_title">Branchy helper</string>
+    <string name="branchy_cluster_subtitle">Lend this phone to a Branchy training cluster</string>
+    <string name="branchy_cluster_status_title">Status</string>
+    <string name="branchy_cluster_status_running">The helper is running. The main device finds it automatically on the same network, or you can add it by address.</string>
+    <string name="branchy_cluster_status_stopped">The helper is stopped.</string>
+    <string name="branchy_cluster_address">Address: %1$s</string>
+    <string name="branchy_cluster_address_unknown">No network address found. Connect to the same Wi-Fi or VPN as the main device.</string>
+    <string name="branchy_cluster_keep_awake_hint">Keep this phone plugged in. The helper keeps working with the screen off.</string>
+
+    <string name="branchy_cluster_token_title">Cluster token</string>
+    <string name="branchy_cluster_token_hint">Open Branchy on the main device, copy its cluster token and paste it here. All devices of a cluster share the same token.</string>
+    <string name="branchy_cluster_token_set">Token saved: %1$s</string>
+    <string name="branchy_cluster_token_missing">No token saved yet.</string>
+    <string name="branchy_cluster_token_label">Token</string>
+    <string name="branchy_cluster_token_paste">Paste</string>
+    <string name="branchy_cluster_token_save">Save</string>
+    <string name="branchy_cluster_token_clear">Remove</string>
+    <string name="branchy_cluster_token_saved_notice">Token saved.</string>
+    <string name="branchy_cluster_token_invalid">That is not a valid token. It has 64 characters (0–9, a–f).</string>
+    <string name="branchy_cluster_token_cleared_notice">Token removed.</string>
+
+    <string name="branchy_cluster_settings_title">Options</string>
+    <string name="branchy_cluster_setting_name">Device name</string>
+    <string name="branchy_cluster_setting_port">Port</string>
+    <string name="branchy_cluster_setting_threads">Threads</string>
+    <string name="branchy_cluster_settings_locked">Stop the helper to change these options.</string>
+    <string name="branchy_cluster_port_invalid">The port must be between 1024 and 65534.</string>
+
+    <string name="branchy_cluster_log_title">Log</string>
+    <string name="branchy_cluster_log_empty">Nothing yet.</string>
+    <string name="branchy_cluster_log_clear">Clear log</string>
+
+    <string name="branchy_cluster_start">Start helping</string>
+    <string name="branchy_cluster_stop">Stop helping</string>
+    <string name="branchy_cluster_start_needs_token">Save the cluster token first.</string>
+
+    <string name="branchy_cluster_roles_title">What to help with</string>
+    <string name="branchy_cluster_roles_hint">Choose what this phone offers to the main device. At least one must stay on.</string>
+    <string name="branchy_cluster_roles_locked">Stop the helper to change the roles.</string>
+    <string name="branchy_cluster_role_train">Help training</string>
+    <string name="branchy_cluster_role_infer">Help inference</string>
+    <string name="branchy_cluster_role_need_one">At least one role must stay on.</string>
+    <string name="branchy_cluster_battery_paused_status">Paused: the battery is low and the phone is not charging.</string>
+
+    <string name="branchy_cluster_infer_title">Inference slice</string>
+    <string name="branchy_cluster_infer_hint">The main device sends this phone a slice of the model. The helper loads it as soon as it arrives. You can also choose a slice file from this phone.</string>
+    <string name="branchy_cluster_slice_none">No slice received yet.</string>
+    <string name="branchy_cluster_slice_name">Slice: %1$s</string>
+    <string name="branchy_cluster_slice_size">Size: %1$s</string>
+    <string name="branchy_cluster_slice_branches">Hosted branches: %1$s</string>
+    <string name="branchy_cluster_slice_branches_unknown">Hosted branches: not in the file name</string>
+    <string name="branchy_cluster_slice_pick">Choose a slice file</string>
+    <string name="branchy_cluster_slice_copying">Copying the slice…</string>
+    <string name="branchy_cluster_slice_needs_role">Turn on \"Help inference\" first.</string>
+    <string name="branchy_cluster_slice_bad_name">Choose a file whose name ends in .slice.gguf.</string>
+    <string name="branchy_cluster_slice_copy_failed">Could not copy the slice file.</string>
+    <string name="branchy_cluster_infer_off">Inference helper: not running</string>
+    <string name="branchy_cluster_infer_running">Inference helper: running on port %1$d</string>
+    <string name="branchy_cluster_infer_exited">Inference helper: exited (code %1$d)</string>
+    <string name="branchy_cluster_infer_output_title">Last helper output</string>
+    <string name="branchy_cluster_setting_ctx">Inference context (tokens)</string>
+    <string name="branchy_cluster_setting_battery_guard">Pause when the battery is low</string>
+    <string name="branchy_cluster_setting_battery_min">Pause below this battery level (%)</string>
+
+    <string name="branchy_cluster_log_slice_received">Slice received: %1$s</string>
+    <string name="branchy_cluster_log_infer_disabled">The slice was stored, but \"Help inference\" is off, so it was not loaded.</string>
+    <string name="branchy_cluster_log_no_helper_binary">The inference helper binary was not found.</string>
+    <string name="branchy_cluster_log_infer_starting">Loading slice %1$s (inference port %2$d)</string>
+    <string name="branchy_cluster_log_infer_stopped">The inference helper stopped (exit code %1$d)</string>
+    <string name="branchy_cluster_log_battery_paused">Battery at %1$d%%: helper paused.</string>
+    <string name="branchy_cluster_log_battery_resumed">Battery at %1$d%%: helper resumed.</string>
+</resources>

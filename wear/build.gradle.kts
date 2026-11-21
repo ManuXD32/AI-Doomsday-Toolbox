@@ -11,9 +11,9 @@ val syncWearAssets = tasks.register<Sync>("syncWearAssets") {
 
     // Keep the complete pre-existing phone asset tree. The new world and animation
     // trees are staged separately below so the watch receives only lightweight
-    // poster frames from the animation tree.
+    // poster frames from the animation tree. The 3D-worlds runtime (three.js) is phone-only.
     from(sharedPhoneAssets) {
-        exclude("tama/world/**", "tama/animations/**")
+        exclude("tama/world/**", "tama/animations/**", "worlds/**", "licenses/three-js-LICENSE.txt")
     }
     from(sharedPhoneAssets) {
         include("tama/animations/frames/**/*_0.png")

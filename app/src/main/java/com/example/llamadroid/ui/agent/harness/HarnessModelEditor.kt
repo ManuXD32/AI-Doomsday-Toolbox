@@ -344,129 +344,129 @@ private fun HarnessEditableModelRow(
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            return@AppSectionCard
-        }
-        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedTextField(
-                value = contextText,
-                onValueChange = { contextText = it.filter(Char::isDigit).take(12) },
-                modifier = Modifier.fillMaxWidth(),
-                label = { Text(stringResource(R.string.harness_model_editor_context)) },
-                supportingText = {
-                    if (model.isLiteRt) {
-                        Text(
-                            stringResource(
-                                R.string.harness_app_tools_litert_context_hint,
-                                minOf(model.advertisedContextWindow ?: 16_384L, 16_384L).toInt(),
-                                model.advertisedContextWindow?.toInt() ?: 16_384,
+        } else {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = contextText,
+                    onValueChange = { contextText = it.filter(Char::isDigit).take(12) },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text(stringResource(R.string.harness_model_editor_context)) },
+                    supportingText = {
+                        if (model.isLiteRt) {
+                            Text(
+                                stringResource(
+                                    R.string.harness_app_tools_litert_context_hint,
+                                    minOf(model.advertisedContextWindow ?: 16_384L, 16_384L).toInt(),
+                                    model.advertisedContextWindow?.toInt() ?: 16_384,
+                                )
                             )
-                        )
-                    } else if (model.contextWindow == null) {
-                        Text(
-                            stringResource(
-                                if (model.wireId.startsWith("llama:")) {
-                                    R.string.harness_model_editor_runtime_context
-                                } else {
-                                    R.string.harness_model_editor_unknown
-                                }
+                        } else if (model.contextWindow == null) {
+                            Text(
+                                stringResource(
+                                    if (model.wireId.startsWith("llama:")) {
+                                        R.string.harness_model_editor_runtime_context
+                                    } else {
+                                        R.string.harness_model_editor_unknown
+                                    }
+                                )
                             )
-                        )
-                    }
-                },
-                singleLine = true,
-            )
-            OutlinedTextField(
-                value = outputText,
-                onValueChange = { outputText = it.filter(Char::isDigit).take(12) },
-                modifier = Modifier.fillMaxWidth(),
-                label = { Text(stringResource(R.string.harness_model_editor_output)) },
-                supportingText = {
-                    if (model.isLiteRt) {
-                        Text(stringResource(
-                            R.string.harness_app_tools_litert_output_hint,
-                            model.maxTokens ?: 2_048L,
-                        ))
-                    }
-                },
-                singleLine = true,
-            )
-        }
-        if (model.isLiteRt) {
-            model.backendLimits?.let { limits ->
-                val effectiveContext = limits.contextTokens ?: model.contextWindow
-                val effectiveOutput = limits.outputTokens ?: model.maxTokens
-                if (effectiveContext != null && effectiveOutput != null) {
-                    Text(
-                        stringResource(
-                            R.string.harness_litert_0984_effective_limit,
-                            limits.backend?.uppercase().orEmpty(),
-                            effectiveContext.toInt(),
-                            effectiveOutput.toInt(),
-                        ),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                if (limits.backend == "cpu" && limits.autoChoseCpuForCapacity) {
-                    Text(
-                        stringResource(R.string.harness_litert_0984_auto_cpu_capacity),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                if (
-                    limits.backend == "gpu" && limits.requestedBackend == "gpu" &&
-                    limits.gpuSafetyLimitApplied && effectiveContext != null && effectiveOutput != null
-                ) {
-                    Text(
-                        stringResource(
-                            R.string.harness_litert_0984_forced_gpu_warning,
-                            effectiveContext.toInt(),
-                            effectiveOutput.toInt(),
-                        ),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error,
-                    )
-                }
+                        }
+                    },
+                    singleLine = true,
+                )
+                OutlinedTextField(
+                    value = outputText,
+                    onValueChange = { outputText = it.filter(Char::isDigit).take(12) },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text(stringResource(R.string.harness_model_editor_output)) },
+                    supportingText = {
+                        if (model.isLiteRt) {
+                            Text(stringResource(
+                                R.string.harness_app_tools_litert_output_hint,
+                                model.maxTokens ?: 2_048L,
+                            ))
+                        }
+                    },
+                    singleLine = true,
+                )
             }
-            Text(
-                stringResource(R.string.harness_litert_0984_model_mtp_setting),
-                style = MaterialTheme.typography.labelMedium,
-            )
-            HarnessLiteRtOverrideChoices(value = mtpOverride, onChange = { mtpOverride = it })
-            Text(
-                stringResource(R.string.harness_litert_0984_model_thinking_setting),
-                style = MaterialTheme.typography.labelMedium,
-            )
-            HarnessLiteRtOverrideChoices(value = thinkingOverride, onChange = { thinkingOverride = it })
-        }
-        OutlinedButton(
-            onClick = {
-                if (model.isAndroidManaged) {
-                    onAction(
-                        NativeHarnessUiAction.UpdateLocalModelCapability(
-                            wireId = model.wireId,
-                            contextTokens = contextText.trim().toLongOrNull()?.takeIf { it > 0L },
-                            maxOutputTokens = outputText.trim().toLongOrNull()?.takeIf { it > 0L },
-                            mtpEnabled = mtpOverride.takeIf { model.isLiteRt },
-                            thinkingEnabled = thinkingOverride.takeIf { model.isLiteRt },
+            if (model.isLiteRt) {
+                model.backendLimits?.let { limits ->
+                    val effectiveContext = limits.contextTokens ?: model.contextWindow
+                    val effectiveOutput = limits.outputTokens ?: model.maxTokens
+                    if (effectiveContext != null && effectiveOutput != null) {
+                        Text(
+                            stringResource(
+                                R.string.harness_litert_0984_effective_limit,
+                                limits.backend?.uppercase().orEmpty(),
+                                effectiveContext.toInt(),
+                                effectiveOutput.toInt(),
+                            ),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
-                    )
-                } else {
-                    updateNativeHarnessModelRows(
-                        model.fieldValue,
-                        model.wireId,
-                        contextText,
-                        outputText,
-                    )?.let { updated ->
-                        onAction(NativeHarnessUiAction.UpdateProviderField(model.providerId, model.fieldKey, updated))
+                    }
+                    if (limits.backend == "cpu" && limits.autoChoseCpuForCapacity) {
+                        Text(
+                            stringResource(R.string.harness_litert_0984_auto_cpu_capacity),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    if (
+                        limits.backend == "gpu" && limits.requestedBackend == "gpu" &&
+                        limits.gpuSafetyLimitApplied && effectiveContext != null && effectiveOutput != null
+                    ) {
+                        Text(
+                            stringResource(
+                                R.string.harness_litert_0984_forced_gpu_warning,
+                                effectiveContext.toInt(),
+                                effectiveOutput.toInt(),
+                            ),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
                     }
                 }
-            },
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Icon(Icons.Default.Save, contentDescription = null)
-            Text(stringResource(R.string.harness_model_editor_save))
+                Text(
+                    stringResource(R.string.harness_litert_0984_model_mtp_setting),
+                    style = MaterialTheme.typography.labelMedium,
+                )
+                HarnessLiteRtOverrideChoices(value = mtpOverride, onChange = { mtpOverride = it })
+                Text(
+                    stringResource(R.string.harness_litert_0984_model_thinking_setting),
+                    style = MaterialTheme.typography.labelMedium,
+                )
+                HarnessLiteRtOverrideChoices(value = thinkingOverride, onChange = { thinkingOverride = it })
+            }
+            OutlinedButton(
+                onClick = {
+                    if (model.isAndroidManaged) {
+                        onAction(
+                            NativeHarnessUiAction.UpdateLocalModelCapability(
+                                wireId = model.wireId,
+                                contextTokens = contextText.trim().toLongOrNull()?.takeIf { it > 0L },
+                                maxOutputTokens = outputText.trim().toLongOrNull()?.takeIf { it > 0L },
+                                mtpEnabled = mtpOverride.takeIf { model.isLiteRt },
+                                thinkingEnabled = thinkingOverride.takeIf { model.isLiteRt },
+                            )
+                        )
+                    } else {
+                        updateNativeHarnessModelRows(
+                            model.fieldValue,
+                            model.wireId,
+                            contextText,
+                            outputText,
+                        )?.let { updated ->
+                            onAction(NativeHarnessUiAction.UpdateProviderField(model.providerId, model.fieldKey, updated))
+                        }
+                    }
+                },
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Icon(Icons.Default.Save, contentDescription = null)
+                Text(stringResource(R.string.harness_model_editor_save))
+            }
         }
     }
 }

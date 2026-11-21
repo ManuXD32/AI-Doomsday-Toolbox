@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="branchy_r5_edit_title">Editar dispositivos</string>
+    <string name="branchy_r5_edit_intro_title">Cambia los dispositivos de este entrenamiento en pausa</string>
+    <string name="branchy_r5_edit_intro_hint">Añade o quita ayudantes y cambia los hilos, recalcula el plan para el mismo modelo y guarda. El modelo y el punto de control no cambian; el entrenamiento se reanuda en los nuevos dispositivos.</string>
+    <string name="branchy_r5_edit_save_hint">Cambia algo y recalcula. Guardar necesita un plan que quepa y esté al día.</string>
+    <string name="branchy_r5_edit_active">El entrenamiento está activo. Páusalo antes de editar sus dispositivos.</string>
+    <string name="branchy_r5_edit_not_paused">Solo se pueden editar entrenamientos en pausa.</string>
+    <string name="branchy_r5_edit_no_plan">Este entrenamiento no tiene un plan guardado que editar.</string>
+    <string name="branchy_r5_edit_missing">No se encontró el entrenamiento.</string>
+    <string name="branchy_r5_edit_layout_changed">El nuevo plan cambiaría la estructura del modelo, que el punto de control guardado no puede usar. Añade memoria o mantén los dispositivos anteriores.</string>
+    <string name="branchy_r5_edit_saving">Guardando…</string>
+    <string name="branchy_r5_edit_saved">Dispositivos actualizados. Reanuda el entrenamiento para continuar con ellos.</string>
+    <string name="branchy_r5_edit_failed">No se pudo aplicar el cambio: %1$s</string>
+    <string name="branchy_r5_edit_failed_kept">Siguen configurados los dispositivos anteriores.</string>
+    <string name="branchy_r5_edit_consolidating_title">Reuniendo el punto de control</string>
+    <string name="branchy_r5_edit_consolidating_hint">La asignación cambió, así que este teléfono está descargando las partes del punto de control que tienen los ayudantes. Mantén los ayudantes conectados hasta que termine.</string>
+    <string name="branchy_r5_edit_consolidating_unit">%1$s de %2$s: %3$s de %4$s</string>
+</resources>

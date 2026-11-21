@@ -7,6 +7,11 @@ import com.example.llamadroid.data.model.LlamaMessageAttachmentEntity
 import com.example.llamadroid.data.model.LlamaMessageEntity
 import com.example.llamadroid.data.model.modelReference
 import com.example.llamadroid.service.NativeChatToolConfig
+import com.example.llamadroid.service.chat.AttachedImageLogic
+import com.example.llamadroid.service.chat.AttachedImagePictures
+import com.example.llamadroid.service.chat.AttachedImageRef
+import com.example.llamadroid.service.chat.AttachedImageResolution
+import com.example.llamadroid.service.chat.AttachedImageTurn
 import com.example.llamadroid.service.NativeChatWorkspaceSupport
 import com.example.llamadroid.service.delegation.NativeChatDelegation
 import com.example.llamadroid.service.delegation.NativeChatDelegationConfig
@@ -23,7 +28,16 @@ import java.io.File
  */
 object NativeChatTurnDecorators {
 
-    suspend fun apply(context: Context, chatId: Long, history: List<LlamaMessageEntity>): List<LlamaMessageEntity> {
+    /**
+     * [images] decides how attached images reach the model (pictures or helper descriptions); when set,
+     * the pictures of the turn are published through [AttachedImagePictures] for message building.
+     */
+    suspend fun apply(
+        context: Context,
+        chatId: Long,
+        history: List<LlamaMessageEntity>,
+        images: AttachedImageTurn? = null
+    ): List<LlamaMessageEntity> {
         if (history.isEmpty()) return history
         // Read only in the catch below; kept in a holder so the compiler sees the assignments as used.
         val progress = DecoratorProgress(stage = "bind", fallback = history)
@@ -55,10 +69,28 @@ object NativeChatTurnDecorators {
                 .groupBy { it.messageId!! }
             val delegationOn = attachmentsListed(db, chatId)
             val workspaceRoot = NativeChatWorkspaceSupport.rootIfPresent(context, chatId)
+            var resolution: AttachedImageResolution? = null
+            if (images != null) {
+                val userIds = list.filter { it.role == "user" && it.id > 0L }.map { it.id }.toSet()
+                val refs = byMessage.values.flatten().filter {
+                    it.source == LlamaMessageAttachmentSource.USER && it.messageId in userIds &&
+                        AttachedImageLogic.isImage(it.displayName, it.mimeType)
+                }.map { AttachedImageRef(it.id, it.messageId!!, it.path, it.displayName, it.mimeType) }
+                val latestUser = list.lastOrNull { it.role == "user" && it.id > 0L }
+                resolution = try {
+                    images.resolve(refs, latestUser?.id, !latestUser?.imagePath.isNullOrBlank())
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (error: Exception) {
+                    DebugLog.log("NativeChatTurnDecorators: image handling failed ${error.javaClass.simpleName}")
+                    null
+                }
+            }
             fun manifestItem(row: LlamaMessageAttachmentEntity) = AttachmentManifestItem(
                 row.modelReference,
                 NativeChatTurnDecoratorLogic.workspaceRelativePath(workspaceRoot, File(row.path)) ?: row.displayName,
-                row.sizeBytes
+                row.sizeBytes,
+                resolution?.markers?.get(row.id)
             )
             list = list.map { entity ->
                 if (entity.id <= 0L) return@map entity
@@ -82,7 +114,19 @@ object NativeChatTurnDecorators {
                     }
                 }
                 if (items.isEmpty()) entity
-                else entity.copy(content = NativeChatTurnDecoratorLogic.appendManifest(entity.content, items))
+                else entity.copy(
+                    content = NativeChatTurnDecoratorLogic.appendManifest(
+                        entity.content, items,
+                        note = AttachedImageLogic.OWN_VISION_NOTE.takeIf { resolution?.noteMessageId == entity.id },
+                        extraBlocks = resolution?.descriptionBlocks?.get(entity.id).orEmpty()
+                    )
+                )
+            }
+            if (images != null) {
+                AttachedImagePictures.set(
+                    chatId,
+                    resolution?.let { AttachedImageLogic.remapToMergedIds(list, it.pictures) }.orEmpty()
+                )
             }
 
             // (d) keep strict templates alternating.

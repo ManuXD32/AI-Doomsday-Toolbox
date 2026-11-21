@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="chat_card_map_attribution">© OpenStreetMap contributors</string>
+    <string name="chat_card_map_close">Close map</string>
+    <string name="chat_card_map_webview_crashed">The map view stopped. Close it and open it again.</string>
+    <string name="chat_card_map_open_maps_app">Open in maps app</string>
+    <string name="chat_card_map_no_maps_app">No maps app found</string>
+    <string name="chat_card_map_loading">Loading map…</string>
+    <string name="chat_card_map_offline">Map unavailable offline. Showing the places only.</string>
+    <string name="chat_card_map_unlocated">Location not found</string>
+    <string name="chat_card_map_preview_description">Map preview. Tap to open the full map.</string>
+    <string name="chat_card_map_expand">Expand</string>
+    <string name="chat_card_map_load_error">Map failed to load: %1$s</string>
+    <string name="chat_card_map_timeout">The map did not load. You can still open the places in a maps app below.</string>
+</resources>

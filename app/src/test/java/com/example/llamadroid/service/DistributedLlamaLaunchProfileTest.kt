@@ -2,6 +2,7 @@ package com.example.llamadroid.service
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -208,14 +209,100 @@ class DistributedLlamaLaunchProfileTest {
                 )
             )
         )
-        assertEquals("row", hosted.config.splitMode)
-        assertEquals(0, hosted.config.mainGpu)
+        // Row split over RPC is never emitted: a KV host on a worker keeps the layer split.
+        assertNotEquals("row", hosted.config.splitMode)
+        assertNull(hosted.config.mainGpu)
+        assertEquals(DistributedPerf.DEFAULT_UBATCH, hosted.config.physicalBatchSize)
+        val hostedArgs = ProcessController().getCommand("/bin/llama-server", hosted.config)
+        assertEquals("512", hostedArgs[hostedArgs.indexOf("--ubatch-size") + 1])
+    }
+
+    @Test
+    fun fewestHopsPlanningKeepsSmallModelOnMasterAndReportsIt() {
+        val profile = DistributedLlamaLaunchResolver.resolve(
+            baseRequest().copy(layerPlanning = DistributedLayerPlanning.OPTIMAL_NETWORK, fitEnabled = false, fitTargetMiB = null)
+        )
+        assertTrue(profile.workers.isEmpty())
+        assertTrue(DistributedPlanWarningType.MODEL_FITS_ON_MASTER in profile.planWarnings.map { it.type })
+    }
+
+    private val masterKey = "master_cpu"
+    private val keyA = "worker:worker-a:50052"
+    private val keyB = "worker:worker-b:50052"
+
+    private fun threeDeviceRequest(mode: DistributedLayerPlanning, split: Map<String, Int> = emptyMap()) =
+        baseRequest().copy(
+            layerPlanning = mode,
+            manualSplit = split,
+            fitEnabled = false,
+            fitTargetMiB = null,
+            workers = listOf(
+                DistributedWorkerLaunchSpec("worker-a:50052", 8192),
+                DistributedWorkerLaunchSpec("worker-b:50052", 8192)
+            )
+        )
+
+    @Test
+    fun ramProportionalSplitFollowsMemoryInDeviceOrder() {
+        val profile = DistributedLlamaLaunchResolver.resolve(threeDeviceRequest(DistributedLayerPlanning.RAM_PROPORTIONAL))
+        // Master CPU (2048 MiB) is not part of -ts; the two equal helpers split evenly.
+        assertEquals("0.5000,0.5000", profile.config.tensorSplit)
+        assertEquals(12, profile.mainLayerAllocations.sumOf { it.assignedLayers })
+    }
+
+    @Test
+    fun layersModeUsesTheEnteredValuesExactlyInDeviceOrder() {
+        val profile = DistributedLlamaLaunchResolver.resolve(
+            threeDeviceRequest(DistributedLayerPlanning.LAYERS, mapOf(masterKey to 4, keyA to 5, keyB to 3))
+        )
+        assertEquals(listOf(4, 5, 3), profile.mainLayerAllocations.map { it.assignedLayers })
+        assertEquals(listOf("worker-a:50052", "worker-b:50052"), profile.config.rpcWorkers)
+        assertEquals("0.6250,0.3750", profile.config.tensorSplit)
+        assertTrue(profile.planWarnings.isEmpty())
+    }
+
+    @Test
+    fun percentModeRoundsToTheLayerTotal() {
+        val profile = DistributedLlamaLaunchResolver.resolve(
+            threeDeviceRequest(DistributedLayerPlanning.PERCENT, mapOf(masterKey to 50, keyA to 30, keyB to 20))
+        )
+        assertEquals(listOf(6, 4, 2), profile.mainLayerAllocations.map { it.assignedLayers })
+        assertEquals(12, profile.mainLayerAllocations.sumOf { it.assignedLayers })
+        assertEquals("0.6667,0.3333", profile.config.tensorSplit)
+    }
+
+    @Test
+    fun manualSplitThatDoesNotAddUpIsRejected() {
+        val error = runCatching {
+            DistributedLlamaLaunchResolver.resolve(
+                threeDeviceRequest(DistributedLayerPlanning.LAYERS, mapOf(masterKey to 4, keyA to 5, keyB to 2))
+            )
+        }.exceptionOrNull()
+        assertTrue(error is IllegalArgumentException)
+    }
+
+    @Test
+    fun manualSplitOnlyReportsInsufficientRam() {
+        val profile = DistributedLlamaLaunchResolver.resolve(
+            threeDeviceRequest(DistributedLayerPlanning.LAYERS, mapOf(masterKey to 1, keyA to 10, keyB to 1))
+                .copy(modelSizeMiB = 100_000)
+        )
+        assertEquals(listOf(DistributedPlanWarningType.INSUFFICIENT_RAM), profile.planWarnings.map { it.type })
+    }
+
+    @Test
+    fun ubatchIsConfigurableAndClamped() {
+        val profile = DistributedLlamaLaunchResolver.resolve(baseRequest().copy(ubatchSize = 256))
+        assertEquals(256, profile.config.physicalBatchSize)
+        val clamped = DistributedLlamaLaunchResolver.resolve(baseRequest().copy(ubatchSize = 1))
+        assertEquals(DistributedPerf.MIN_UBATCH, clamped.config.physicalBatchSize)
     }
 
     private fun baseRequest() = DistributedLlamaResolveRequest(
         modelPath = "/models/main.gguf",
         modelSizeMiB = 1024,
         modelLayers = 12,
+        layerPlanning = DistributedLayerPlanning.RAM_PROPORTIONAL,
         workers = listOf(DistributedWorkerLaunchSpec("worker-a:50052", 8192)),
         masterTargetRamMiB = 2048,
         host = "0.0.0.0",

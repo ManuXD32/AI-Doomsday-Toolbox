@@ -18,6 +18,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import com.google.gson.Gson
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.*
+import android.net.Uri
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
@@ -25,6 +26,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
@@ -53,7 +55,6 @@ import com.example.llamadroid.onnx.isOnnxBackgroundRemovalModel
 import com.example.llamadroid.onnx.isOnnxTxt2ImgBundle
 import com.example.llamadroid.onnx.resolveSupertonicVoices
 import com.example.llamadroid.onnx.supertonicLanguageCodes
-import com.example.llamadroid.service.KnowledgeBaseIndexingService
 import com.example.llamadroid.service.LlamaCallService
 import com.example.llamadroid.service.LlamaClientService
 import com.example.llamadroid.service.NativeChatGenerationStates
@@ -61,6 +62,11 @@ import com.example.llamadroid.ui.agent.CustomToolsScreen
 import com.example.llamadroid.service.NativeChatKvCacheStore
 import com.example.llamadroid.service.NativeChatMediaFailures
 import com.example.llamadroid.service.NativeChatToolConfig
+import com.example.llamadroid.ui.ai.llama.chat.cards.ChatCardsUi
+import com.example.llamadroid.ui.ai.llama.chat.cards.rememberChatCardStates
+import com.example.llamadroid.ui.ai.llama.chat.cards.saveChatCardState
+import com.example.llamadroid.ui.ai.llama.chat.cards.submitChatCardAnswer
+import com.example.llamadroid.ui.ai.llama.chat.cards.submitChatCardAnswers
 import com.example.llamadroid.service.withChatAudioOverrides
 import com.example.llamadroid.service.supportsSdTxt2Img
 import com.example.llamadroid.ui.navigation.Screen
@@ -247,6 +253,7 @@ fun LlamaChatScreen(
     var showRenameDialog by remember { mutableStateOf(false) }
     var renameText by remember { mutableStateOf("") }
     var showWorkspaceDialog by rememberSaveable { mutableStateOf(false) }
+    val openWorkspaceAction: () -> Unit = { showWorkspaceDialog = true }
     var showCustomToolsManager by rememberSaveable { mutableStateOf(false) }
     val openedAtMs = remember { System.currentTimeMillis() }
     val autoPlayedAssistantAudioPaths = remember { mutableStateListOf<String>() }
@@ -263,17 +270,23 @@ fun LlamaChatScreen(
     val scope = rememberCoroutineScope()
 
     // Error Handling (Toasts)
+    val toastResources = LocalResources.current
     LaunchedEffect(generationState) {
         (generationState as? LlamaClientService.GenerationState.Error)?.let { errorState ->
             if (errorState.chatId == -1L || errorState.chatId == chatId) {
-                Toast.makeText(context, errorState.message, Toast.LENGTH_LONG).show()
+                Toast.makeText(
+                    context,
+                    toastResources.getString(R.string.chat_generation_error_toast, errorState.message.trim().take(160)),
+                    Toast.LENGTH_LONG
+                ).show()
             }
         }
     }
 
     // Server & Chat details
     // Load this chat by id: the shared chat list holds advanced chats only, so Easy chats are not in it.
-    val observedChat by remember(chatId) { repository.observeChat(chatId) }.collectAsState(initial = null)
+    // Explicit type: without it the compiler inferred Nothing? here (1.00015 crash: LlamaChatEntity cannot be cast to Void).
+    val observedChat: com.example.llamadroid.data.model.LlamaChatEntity? by remember(chatId) { repository.observeChat(chatId) }.collectAsState(initial = null)
     val currentChat = observedChat
     // Easy presentation follows the chat itself, not the global Easy switch.
     val easyMode = currentChat?.easyMode == true
@@ -493,6 +506,8 @@ fun LlamaChatScreen(
         settings.chatDocumentKnowledgeBaseId?.let { knowledgeBaseRepository.observeSources(it) }
             ?: flowOf(emptyList<KnowledgeSourceEntity>())
     }.collectAsState(initial = emptyList())
+    val documentIndexSummary = rememberDocumentIndexSummary(chatDocumentSources)
+    ChatDocumentIndexFollower(chatId, chatDocumentSources)
 
     // ---- Server resolution: the chat's own binding wins, then the route argument, then last used.
     LaunchedEffect(currentChat?.id, currentChat?.serverId, serverRefreshTick) {
@@ -683,6 +698,7 @@ fun LlamaChatScreen(
             return
         }
         if (msg.role != "assistant") return
+        if (NativeChatGenerationStates.stateFor(chatId).let { it is LlamaClientService.GenerationState.Generating || it is LlamaClientService.GenerationState.Queued }) return
         scope.launch {
             viewModel.deleteMessagesAfter(chatId, msg.timestamp, msg.id)
             viewModel.deleteMessageNow(msg)
@@ -754,6 +770,26 @@ fun LlamaChatScreen(
         context.startForegroundService(intent)
     }
 
+    val cardStates = rememberChatCardStates(chatId, settings.cardsEnabled)
+    val chatCards = if (settings.cardsEnabled) {
+        ChatCardsUi(
+            cardStates,
+            submitEnabled = !isChatBusy && activeServer != null,
+            onSubmitBatch = { messageId, answers, text ->
+                activeServer?.id?.let { sid ->
+                    submitChatCardAnswers(context, scope, chatId, sid, messageId, answers, text)
+                }
+            },
+            onSaveState = { messageId, cardIndex, stateJson ->
+                saveChatCardState(context, scope, messageId, cardIndex, stateJson)
+            }
+        ) { messageId, cardIndex, text, stateJson ->
+            activeServer?.id?.let { sid ->
+                submitChatCardAnswer(context, scope, chatId, sid, messageId, cardIndex, text, stateJson)
+            }
+        }
+    } else null
+
     val photoPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickVisualMedia(),
         onResult = { uri ->
@@ -816,103 +852,62 @@ fun LlamaChatScreen(
             }
         }
     )
+    var embeddingPromptUris by remember { mutableStateOf<List<Uri>>(emptyList()) }
+    fun attachPickedDocuments(selectedUris: List<Uri>) {
+        if (selectedUris.isEmpty()) return
+        scope.launch {
+            isExtractingDocument = true
+            try {
+                // Copies into the chat workspace, registers the attachment and queues the KB source (ChatDocumentAttach.kt).
+                handlePickedChatDocuments(
+                    context = context,
+                    chatId = chatId,
+                    uris = selectedUris,
+                    knowledgeBaseRepository = knowledgeBaseRepository,
+                    existingKnowledgeBaseId = settings.chatDocumentKnowledgeBaseId,
+                    chatTitle = currentChat?.title.orEmpty(),
+                    strings = localizedStrings,
+                    onNeedsEmbedding = { embeddingPromptUris = selectedUris }
+                ) { knowledgeBaseId ->
+                    // Only the document knowledge base and its tools are switched on; other tools stay as they are.
+                    applyDocumentModeSettings(settings, knowledgeBaseId)
+                    persistSettings(
+                        chatDocumentKnowledgeBaseIdOverride = knowledgeBaseId,
+                        forceKnowledgeBaseTools = true
+                    )
+                }
+            } finally {
+                isExtractingDocument = false
+            }
+        }
+    }
     val documentPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenMultipleDocuments(),
         onResult = { uris ->
-            val selectedUris = uris.distinctBy { it.toString() }
-            if (selectedUris.isNotEmpty()) {
-                scope.launch {
-                    isExtractingDocument = true
-                    try {
-                        val embeddingConfig = knowledgeBaseRepository.currentEmbeddingConfig()
-                        if (!embeddingConfig.isConfigured) {
-                            Toast.makeText(
-                                context,
-                                localizedStrings.kbUploadNeedsEmbedding,
-                                Toast.LENGTH_LONG
-                            ).show()
-                            return@launch
-                        }
-                        val knowledgeBaseId = settings.chatDocumentKnowledgeBaseId
-                            ?: knowledgeBaseRepository.ensureChatDocumentKnowledgeBase(
-                                chatId = chatId,
-                                chatTitle = currentChat?.title.orEmpty()
-                        )
-                        with(settings) {
-                            chatDocumentKnowledgeBaseId = knowledgeBaseId
-                            selectedKnowledgeBaseIds = emptyList()
-                            toolsEnabled = true
-                            webSearchEnabled = false
-                            kiwixSearchEnabled = false
-                            fetchUrlEnabled = false
-                            dateTimeEnabled = false
-                            calculatorEnabled = false
-                            noteToolsEnabled = false
-                            todoToolsEnabled = false
-                            calendarToolsEnabled = false
-                            alarmToolsEnabled = false
-                            knowledgeBaseEnabled = true
-                            knowledgeBaseAutoContextEnabled = true
-                            imageGenerationEnabled = false
-                            imageIterationEnabled = false
-                            backgroundRemovalEnabled = false
-                            assistantTtsEnabled = false
-                        }
-                        persistSettings(
-                            chatDocumentKnowledgeBaseIdOverride = knowledgeBaseId,
-                            forceKnowledgeBaseTools = true
-                        )
-
-                        val queuedCount = selectedUris.mapNotNull { uri ->
-                            runCatching {
-                                runCatching {
-                                    context.contentResolver.takePersistableUriPermission(
-                                        uri,
-                                        Intent.FLAG_GRANT_READ_URI_PERMISSION
-                                    )
-                                }
-                                knowledgeBaseRepository.queueFile(
-                                    knowledgeBaseId = knowledgeBaseId,
-                                    uri = uri,
-                                    displayName = queryDocumentDisplayName(context, uri)
-                                )
-                            }.onFailure { error ->
-                                Toast.makeText(
-                                    context,
-                                    formatLlamaChatString(
-                                        localizedStrings.documentQueueFailedFormat,
-                                        error.message ?: localizedStrings.errorGeneric
-                                    ),
-                                    Toast.LENGTH_LONG
-                                ).show()
-                            }.getOrNull()
-                        }.onEach { sourceId ->
-                            KnowledgeBaseIndexingService.enqueueQueuedFile(context, sourceId)
-                        }.size
-
-                        if (queuedCount > 0) {
-                            Toast.makeText(
-                                context,
-                                formatLlamaChatString(localizedStrings.documentQueuedForChatFormat, queuedCount),
-                                Toast.LENGTH_SHORT
-                            ).show()
-                        }
-                    } catch (e: Exception) {
-                        Toast.makeText(
-                            context,
-                            formatLlamaChatString(
-                                localizedStrings.documentQueueFailedFormat,
-                                e.message ?: localizedStrings.errorGeneric
-                            ),
-                            Toast.LENGTH_LONG
-                        ).show()
-                    } finally {
-                        isExtractingDocument = false
-                    }
-                }
+            val picked = uris.distinctBy { it.toString() }
+            // Keep read access in case the attach waits for an embedding model download.
+            picked.forEach { uri ->
+                runCatching { context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
             }
+            attachPickedDocuments(picked)
         }
     )
+    if (embeddingPromptUris.isNotEmpty()) {
+        com.example.llamadroid.ui.knowledge.NoEmbeddingModelDialog(
+            onDismiss = { embeddingPromptUris = emptyList() },
+            onConfigured = {
+                val kept = embeddingPromptUris
+                embeddingPromptUris = emptyList()
+                attachPickedDocuments(kept)
+            },
+            onOpenModelManager = navController?.let { nav ->
+                {
+                    embeddingPromptUris = emptyList()
+                    nav.navigate(com.example.llamadroid.ui.navigation.Screen.LLMModels.route)
+                }
+            }
+        )
+    }
     val recordPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
     ) { granted ->
@@ -1154,7 +1149,10 @@ fun LlamaChatScreen(
         bgrModelOptions = nativeChatBgrModelOptions,
         liteRtContextCap = liteRtContextCap,
         onOpenKnowledgeBase = { navController?.navigate(Screen.KnowledgeBase.route) ?: onOpenInApp() },
-        onManageCustomTools = { showCustomToolsManager = true }
+        onManageCustomTools = { showCustomToolsManager = true },
+        // No `if (currentChat != null) ({ … }) else null` here: that form made the compiler treat currentChat as
+        // always null for the rest of the screen (1.00015 crash: LlamaChatEntity cannot be cast to Void).
+        onOpenWorkspace = openWorkspaceAction.takeIf { chatLoaded }
     )
 
     // Easy mic: transcribe with the Whisper model picked in Easy mode through the chat's own audio options.
@@ -1182,7 +1180,7 @@ fun LlamaChatScreen(
                 isCallActive = isCallActiveForChat,
                 callEnabled = activeServer != null,
                 isSearching = isSearching,
-                showWorkspace = settings.effectiveToolsEnabled && settings.fileToolsEnabled && currentChat != null,
+                showWorkspace = currentChat != null,
                 pinned = currentChat?.pinnedToAiHub == true,
                 pinEnabled = currentChat != null && (currentChat.pinnedToAiHub || activeServer != null),
                 clearEnabled = messages.isNotEmpty() && !isChatBusy,
@@ -1381,7 +1379,8 @@ fun LlamaChatScreen(
                 modifier = Modifier.weight(1f),
                 compactions = attachmentsUi.compactions,
                 attachmentsByMessage = attachmentsUi.byMessage,
-                streamingMessage = streamingStepsMessage
+                streamingMessage = streamingStepsMessage,
+                cards = chatCards
             )
 
             ChatServerBanner(
@@ -1438,6 +1437,7 @@ fun LlamaChatScreen(
                 showAttachFile = easyMode || settings.chatToolsEnabledByUser || settings.delegation.enabled,
                 onPickFile = chatFilePicker.launch,
                 isImportingFile = chatFilePicker.importing,
+                documentIndexing = documentIndexSummary,
                 pendingFiles = attachmentsUi.pendingFiles,
                 onRemovePendingFile = { file -> scope.launch { removePendingChatFile(context, file) } }
             )
@@ -1464,6 +1464,7 @@ fun LlamaChatScreen(
                 NativeChatWorkspaceDialog(
                     context = context,
                     chatId = currentChat.id,
+                    chatTitle = currentChat.title,
                     onDismiss = { showWorkspaceDialog = false }
                 )
             }

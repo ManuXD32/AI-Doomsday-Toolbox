@@ -6,7 +6,13 @@ import com.example.llamadroid.data.model.LlamaMessageKind
 import java.util.Locale
 
 /** One file listed in a user-turn manifest line. */
-data class AttachmentManifestItem(val ref: String, val name: String, val sizeBytes: Long)
+data class AttachmentManifestItem(
+    val ref: String,
+    val name: String,
+    val sizeBytes: Long,
+    /** Optional parenthesised remark, e.g. how an attached image reaches the model this turn. */
+    val marker: String? = null
+)
 
 /**
  * Pure list transforms behind [NativeChatTurnDecorators]. None of them touch Room or the
@@ -79,12 +85,19 @@ object NativeChatTurnDecoratorLogic {
     fun manifestLine(items: List<AttachmentManifestItem>): String? {
         if (items.isEmpty()) return null
         return items.joinToString(", ", prefix = "[Attached files: ", postfix = "]") {
-            "${it.ref} ${it.name.replace(Regex("[\\r\\n\\[\\]]"), " ").trim()} (${formatSize(it.sizeBytes)})"
+            "${it.ref} ${it.name.replace(Regex("[\\r\\n\\[\\]]"), " ").trim()} (${formatSize(it.sizeBytes)})" + (it.marker?.let { m -> " $m" } ?: "")
         }
     }
 
-    fun appendManifest(content: String, items: List<AttachmentManifestItem>): String {
-        val line = manifestLine(items) ?: return content
+    /** Appends the manifest line (plus an optional [note] line and [extraBlocks]) to [content]. */
+    fun appendManifest(
+        content: String,
+        items: List<AttachmentManifestItem>,
+        note: String? = null,
+        extraBlocks: List<String> = emptyList()
+    ): String {
+        val manifest = manifestLine(items) ?: return content
+        val line = (listOf(listOfNotNull(manifest, note).joinToString("\n")) + extraBlocks).joinToString("\n\n")
         return if (content.isBlank()) line else content.trimEnd() + "\n\n" + line
     }
 

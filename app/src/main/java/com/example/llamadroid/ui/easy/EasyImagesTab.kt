@@ -37,6 +37,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -57,6 +58,8 @@ import com.example.llamadroid.data.easy.EasyModeSettings
 import com.example.llamadroid.data.easy.EasyModelCatalog
 import com.example.llamadroid.data.easy.coerceEasyImageSize
 import com.example.llamadroid.data.easy.easySizeLabel
+import com.example.llamadroid.sd.SdRamDecision
+import com.example.llamadroid.sd.SdRamGate
 import com.example.llamadroid.service.OnnxImageGenerationService
 import com.example.llamadroid.service.OnnxImageGenerationState
 import com.example.llamadroid.service.OnnxImageGenerationStateStore
@@ -69,8 +72,10 @@ import com.example.llamadroid.ui.ai.rememberAiJobStartupGuard
 import com.example.llamadroid.ui.ai.rememberBatteryOptimizationGateState
 import com.example.llamadroid.ui.components.AppSectionCard
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.util.Locale
 
 private fun decodeSampled(path: String, maxSide: Int = 1024): Bitmap? {
     val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
@@ -79,6 +84,8 @@ private fun decodeSampled(path: String, maxSide: Int = 1024): Bitmap? {
     while (maxOf(bounds.outWidth, bounds.outHeight) / sample > maxSide) sample *= 2
     return BitmapFactory.decodeFile(path, BitmapFactory.Options().apply { inSampleSize = sample })
 }
+
+private fun formatGb(bytes: Long): String = String.format(Locale.getDefault(), "%.1f GB", bytes / 1_000_000_000.0)
 
 private val EASY_IMAGE_EXTENSIONS = setOf("png", "jpg", "jpeg", "webp")
 
@@ -98,6 +105,8 @@ private fun newestEasyImage(root: File): String? =
 fun EasyImagesTab(onOpenModels: () -> Unit, onOpenGallery: () -> Unit) {
     val emptyPromptText = stringResource(R.string.easy_images_empty_prompt)
     val preparingText = stringResource(R.string.easy_images_preparing)
+    val ramRefusedFormat = stringResource(R.string.easy_image_ram_refused)
+    val ramDownscaledFormat = stringResource(R.string.easy_image_ram_downscaled)
     val launchFailedFormat = stringResource(R.string.easy_images_launch_failed)
     val context = LocalContext.current
     val settings = remember { EasyModeSettings(context) }
@@ -115,6 +124,9 @@ fun EasyImagesTab(onOpenModels: () -> Unit, onOpenGallery: () -> Unit) {
     var sizeIndex by rememberSaveable { mutableIntStateOf(0) }
     val size = preset?.let { coerceEasyImageSize(it, it.sizes.getOrNull(sizeIndex)) }
     var errorText by remember { mutableStateOf<String?>(null) }
+    var ramRefused by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    var noticeText by remember { mutableStateOf<String?>(null) }
     var pendingStart by remember { mutableStateOf(false) }
     var lastEngine by rememberSaveable { mutableStateOf<String?>(null) }
 
@@ -162,7 +174,7 @@ fun EasyImagesTab(onOpenModels: () -> Unit, onOpenGallery: () -> Unit) {
         if (sdBusy || onnxBusy || finished) pendingStart = false
     }
 
-    fun launch() {
+    fun launch(skipRamGate: Boolean = false) {
         val current = selection ?: return
         val chosenSize = size ?: return
         val text = prompt.trim()
@@ -175,38 +187,72 @@ fun EasyImagesTab(onOpenModels: () -> Unit, onOpenGallery: () -> Unit) {
             return
         }
         errorText = null
-        batteryGate.runAfterCheck {
-            runCatching {
-                pendingStart = true
-                lastEngine = current.engine.name
-                when (current.engine) {
-                    EasyImageEngine.SDCPP -> {
-                        sdHolder.easyOrigin.value = true
-                        sdHolder.reset()
-                        val config = buildEasySdConfig(context, current, text, chosenSize)
-                        startupGuard.run("easy_sd_txt2img_start") {
-                            ContextCompat.startForegroundService(
-                                context,
-                                StableDiffusionService.createStartIntent(context, config)
-                            )
-                        }
+        noticeText = null
+        ramRefused = false
+        scope.launch ramGate@{
+            // Image-only RAM gate (sd.cpp runs); ONNX keeps its own bounded canvas.
+            var launchSize = chosenSize
+            var launchTiling = false
+            if (skipRamGate && current.engine == EasyImageEngine.SDCPP) {
+                // "Try anyway": mmap pages can be evicted, so the estimate may be too pessimistic.
+                launchSize = 512 to 512
+                launchTiling = true
+            } else if (current.engine == EasyImageEngine.SDCPP) {
+                val decision = withContext(Dispatchers.IO) {
+                    SdRamGate.decide(
+                        easyImageWeightBytes(current), easyImageRamClass(current.kind),
+                        chosenSize.first, chosenSize.second, SdRamGate.snapshot(context)
+                    )
+                }
+                when (decision) {
+                    SdRamDecision.Fits -> Unit
+                    is SdRamDecision.Downscale -> {
+                        launchSize = decision.width to decision.height
+                        launchTiling = decision.vaeTiling
+                        noticeText = ramDownscaledFormat.replace("%1\$s", easySizeLabel(launchSize))
                     }
-                    EasyImageEngine.ONNX -> {
-                        val config = buildEasyOnnxConfig(context, current, text, chosenSize)
-                        onnxHolder.easyOrigin.value = true
-                        onnxHolder.updateState(
-                            OnnxImageGenerationState.Preparing(preparingText)
-                        )
-                        startupGuard.run("easy_onnx_image_start") {
-                            context.startForegroundService(
-                                OnnxImageGenerationService.createStartIntent(context, config)
-                            )
-                        }
+                    is SdRamDecision.Refuse -> {
+                        errorText = ramRefusedFormat
+                            .replace("%1\$s", formatGb(decision.neededBytes))
+                            .replace("%2\$s", formatGb(decision.availableBytes))
+                        ramRefused = true
+                        return@ramGate
                     }
                 }
-            }.onFailure { error ->
-                pendingStart = false
-                errorText = launchFailedFormat.replace("%1\$s", error.message ?: error.javaClass.simpleName)
+            }
+            batteryGate.runAfterCheck {
+                runCatching {
+                    pendingStart = true
+                    lastEngine = current.engine.name
+                    when (current.engine) {
+                        EasyImageEngine.SDCPP -> {
+                            sdHolder.easyOrigin.value = true
+                            sdHolder.reset()
+                            val config = buildEasySdConfig(context, current, text, launchSize, launchTiling)
+                            startupGuard.run("easy_sd_txt2img_start") {
+                                ContextCompat.startForegroundService(
+                                    context,
+                                    StableDiffusionService.createStartIntent(context, config)
+                                )
+                            }
+                        }
+                        EasyImageEngine.ONNX -> {
+                            val config = buildEasyOnnxConfig(context, current, text, chosenSize)
+                            onnxHolder.easyOrigin.value = true
+                            onnxHolder.updateState(
+                                OnnxImageGenerationState.Preparing(preparingText)
+                            )
+                            startupGuard.run("easy_onnx_image_start") {
+                                context.startForegroundService(
+                                    OnnxImageGenerationService.createStartIntent(context, config)
+                                )
+                            }
+                        }
+                    }
+                }.onFailure { error ->
+                    pendingStart = false
+                    errorText = launchFailedFormat.replace("%1\$s", error.message ?: error.javaClass.simpleName)
+                }
             }
         }
     }
@@ -287,8 +333,16 @@ fun EasyImagesTab(onOpenModels: () -> Unit, onOpenGallery: () -> Unit) {
             }
         }
 
+        noticeText?.let {
+            Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
         errorText?.let {
             Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+        }
+        if (ramRefused && !busy) {
+            TextButton(onClick = { launch(skipRamGate = true) }) {
+                Text(stringResource(R.string.easy_image_ram_try_anyway), maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
         }
 
         if (busy) {

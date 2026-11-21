@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="sd_r8_w06_family_automatic">Automatic</string>
+    <string name="sd_r8_w06_family_override">Model type override</string>
+    <string name="sd_r8_w06_ready">Ready</string>
+    <string name="sd_r8_w06_selected">Selected</string>
+    <string name="sd_r8_w06_not_installed">Not installed</string>
+    <string name="sd_r8_w06_unknown_family">Unknown model type, set it under Advanced</string>
+    <string name="sd_r8_w06_family_line">Model type: %1$s</string>
+    <string name="sd_r8_w06_component_line">%1$s: %2$s</string>
+    <string name="sd_r8_w06_missing_line">Missing: %1$s</string>
+    <string name="sd_r8_w06_get_models">Get models</string>
+    <string name="sd_r8_w06_empty">No video model is installed yet. Download one to start generating video.</string>
+    <string name="sd_r8_w06_picker_title">Video model</string>
+    <plurals name="sd_r8_w06_files_missing">
+        <item quantity="one">%d file missing</item>
+        <item quantity="other">%d files missing</item>
+    </plurals>
+</resources>

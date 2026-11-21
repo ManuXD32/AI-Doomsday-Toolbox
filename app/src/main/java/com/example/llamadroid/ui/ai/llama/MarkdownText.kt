@@ -5,7 +5,11 @@ import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -14,6 +18,10 @@ import androidx.compose.foundation.text.selection.DisableSelection
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.Language
+import androidx.compose.material.icons.filled.ViewInAr
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -29,10 +37,17 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.llamadroid.R
+import com.example.llamadroid.chat.cards.ChatCardFence
+import com.example.llamadroid.chat.cards.ChatCard
+import com.example.llamadroid.chat.cards.ChatCardParser
+import com.example.llamadroid.ui.ai.llama.chat.cards.ChatCardPreparingLine
+import com.example.llamadroid.worlds.ui.WorldSourceViewerDialog
+import com.example.llamadroid.worlds.ui.worldSourceFor
 
 private const val URL_ANNOTATION_TAG = "url"
 private val HyperlinkBlue = Color(0xFF1A73E8)
@@ -50,15 +65,42 @@ fun MarkdownText(
     text: String,
     textColor: Color,
     modifier: Modifier = Modifier,
-    onLinkClick: (String) -> Boolean = { false }
+    onLinkClick: (String) -> Boolean = { false },
+    /** True while the text is still being generated: code blocks follow their bottom and skip Run detection. */
+    streaming: Boolean = false,
+    /**
+     * Native chat only: when set, complete ```card fences that parse into a [ChatCard] are drawn by this slot
+     * (index = 0-based among the card fences) and an unfinished one shows a one-line placeholder while [streaming].
+     * Null keeps every fence a normal code block (all other callers).
+     */
+    cardContent: (@Composable (cardIndex: Int, card: ChatCard) -> Unit)? = null
 ) {
-    val blocks = parseIntoBlocks(text)
+    val cardsOn = cardContent != null
+    // With a card slot, a card fence the model forgot to close before the next card is closed first.
+    val blocks = remember(text, cardsOn) { parseIntoBlocks(if (cardsOn) ChatCardFence.normalize(text) else text) }
+    // While streaming only labelled `card` fences count (no JSON parsing per token); a `json` or unlabelled
+    // card is recognised once the message is complete. Callers without a card slot never pay for the check.
+    val cardIndexes = remember(blocks, streaming, cardsOn) {
+        if (cardsOn) cardFenceIndexes(blocks, labeledOnly = streaming) else emptyMap()
+    }
 
     Column(modifier = modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
         blocks.forEachIndexed { index, block ->
             key(index, block.stableKey()) {
                 when (block) {
-                    is MdBlock.CodeBlock -> CodeBlockView(block)
+                    is MdBlock.CodeBlock -> {
+                        val isCardFence = cardIndexes.containsKey(index)
+                        val card = remember(block.code, streaming, isCardFence) {
+                            if (isCardFence && !streaming) ChatCardParser.parse(block.code) else null
+                        }
+                        when {
+                            isCardFence && streaming -> ChatCardPreparingLine()
+                            card != null && cardContent != null -> DisableSelection {
+                                cardContent(cardIndexes[index] ?: 0, card)
+                            }
+                            else -> CodeBlockView(block, streaming)
+                        }
+                    }
                     is MdBlock.TableBlock -> MarkdownTableView(block, textColor, onLinkClick)
                     is MdBlock.TextBlock -> MarkdownSpannedText(block.content, textColor, onLinkClick)
                 }
@@ -75,8 +117,24 @@ private sealed class MdBlock {
     data class TableBlock(val header: List<String>, val rows: List<List<String>>) : MdBlock()
 }
 
+/** Block index -> 0-based index among the card fences of the message. */
+private fun cardFenceIndexes(blocks: List<MdBlock>, labeledOnly: Boolean): Map<Int, Int> {
+    val out = HashMap<Int, Int>()
+    blocks.forEachIndexed { i, b ->
+        if (b is MdBlock.CodeBlock) {
+            val isCard = if (labeledOnly) ChatCardFence.isLabeled(b.language) else ChatCardFence.isCard(b.language, b.code)
+            if (isCard) out[i] = out.size
+        }
+    }
+    return out
+}
+
+/** Counts [parseIntoBlocks] runs; the no-re-parse test reads it. */
+internal val markdownParseCount = java.util.concurrent.atomic.AtomicInteger(0)
+
 private fun MdBlock.stableKey(): String = when (this) {
-    is MdBlock.CodeBlock -> "code:${language}:${code.hashCode()}"
+    // Position (the index in the caller's key) and language only: the code grows while streaming.
+    is MdBlock.CodeBlock -> "code:${language}"
     is MdBlock.TableBlock -> "table:${header.hashCode()}:${rows.hashCode()}"
     is MdBlock.TextBlock -> "text:${content.hashCode()}"
 }
@@ -85,6 +143,7 @@ private fun MdBlock.stableKey(): String = when (this) {
 // Splits raw markdown into alternating text blocks and fenced code blocks.
 
 private fun parseIntoBlocks(raw: String): List<MdBlock> {
+    markdownParseCount.incrementAndGet()
     val blocks = mutableListOf<MdBlock>()
     var cursor = 0
 
@@ -245,15 +304,44 @@ private fun isTableSeparator(line: String): Boolean {
     return cells.size >= 2 && cells.all { it.matches(Regex(""":?-+:?""")) }
 }
 
+private val WORLD_LANGUAGES = setOf("html", "htm", "js", "javascript", "jsx", "mjs")
+
 // ─── Code Block Composable ───────────────────────────────────────────────────
 
 @Composable
-private fun CodeBlockView(block: MdBlock.CodeBlock) {
+private fun CodeBlockView(block: MdBlock.CodeBlock, streaming: Boolean = false) {
     val context = LocalContext.current
     val codeCopiedText = stringResource(R.string.llama_code_copied)
     val clipboardManager = LocalClipboardManager.current
     val codeBg = MaterialTheme.colorScheme.surfaceContainerHighest
     val codeScrollState = rememberScrollState()
+    val codeVScrollState = rememberScrollState()
+    var collapsed by rememberSaveable { mutableStateOf(false) }
+    val lineCount = remember(block.code) { block.code.count { it == '\n' } + 1 }
+    // "Run in 3D" is offered only for blocks the world detector accepts on their own.
+    val worldFence = remember(block.language, block.code) {
+        if (block.language.lowercase() in WORLD_LANGUAGES) "```${block.language}\n${block.code}\n```" else null
+    }
+    val worldSource = remember(worldFence, streaming) {
+        if (streaming || worldFence == null) null else worldSourceFor(worldFence, streaming = false)
+    }
+    val canRunWorld = worldSource != null
+    // Follow the bottom of a streaming block until the user drags it; resume when they scroll back down.
+    var follow by remember { mutableStateOf(true) }
+    LaunchedEffect(codeVScrollState) {
+        codeVScrollState.interactionSource.interactions.collect { if (it is DragInteraction.Start) follow = false }
+    }
+    LaunchedEffect(codeVScrollState) {
+        snapshotFlow { !codeVScrollState.isScrollInProgress && codeVScrollState.value >= codeVScrollState.maxValue - 2 }
+            .collect { atBottom -> if (atBottom) follow = true }
+    }
+    LaunchedEffect(streaming, follow) {
+        if (streaming && follow) {
+            snapshotFlow { codeVScrollState.maxValue }.collect { codeVScrollState.scrollTo(it) }
+        }
+    }
+    var showWorld by remember { mutableStateOf(false) }
+    var worldSavedId by remember(block.code) { mutableStateOf<String?>(null) }
 
     Surface(
         color = codeBg,
@@ -274,8 +362,42 @@ private fun CodeBlockView(block: MdBlock.CodeBlock) {
                 Text(
                     text = block.language.ifEmpty { "code" },
                     style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
                 )
+                if (canRunWorld) {
+                    TextButton(
+                        onClick = { showWorld = true },
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                        modifier = Modifier.heightIn(min = 48.dp)
+                    ) {
+                        Icon(
+                            if (worldSource?.isThree == false) Icons.Default.Language else Icons.Default.ViewInAr,
+                            contentDescription = null,
+                            modifier = Modifier.size(14.dp),
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                        Text(
+                            text = stringResource(R.string.worlds_ui_run_html),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.padding(start = 4.dp)
+                        )
+                    }
+                }
+                IconButton(onClick = { collapsed = !collapsed }, modifier = Modifier.size(48.dp)) {
+                    Icon(
+                        if (collapsed) Icons.Default.ExpandMore else Icons.Default.ExpandLess,
+                        contentDescription = stringResource(
+                            if (collapsed) R.string.code_block_expand else R.string.code_block_collapse
+                        ),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
                 TextButton(
                     onClick = {
                         clipboardManager.setText(AnnotatedString(block.code))
@@ -303,26 +425,46 @@ private fun CodeBlockView(block: MdBlock.CodeBlock) {
                 }
             }
 
-            // Code content — horizontally scrollable
-            SelectionContainer {
+            if (collapsed) {
+                Text(
+                    text = pluralStringResource(R.plurals.code_block_lines, lineCount, lineCount),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+                )
+            } else {
+                // Bounded body: both axes scroll inside, so a huge block never makes the chat item enormous.
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
+                        .heightIn(max = 320.dp)
+                        .verticalScroll(codeVScrollState)
                         .horizontalScroll(codeScrollState)
                 ) {
-                    Text(
-                        text = block.code,
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 13.sp,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        modifier = Modifier
-                            .width(IntrinsicSize.Max)
-                            .padding(12.dp),
-                        lineHeight = 18.sp
-                    )
+                    SelectionContainer {
+                        Text(
+                            text = block.code,
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 13.sp,
+                            softWrap = false,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.padding(12.dp),
+                            lineHeight = 18.sp
+                        )
+                    }
                 }
             }
         }
+    }
+    if (showWorld && worldFence != null) {
+        WorldSourceViewerDialog(
+            source = worldFence,
+            savedId = worldSavedId,
+            chatId = null,
+            messageId = null,
+            onSaved = { worldSavedId = it },
+            onDismiss = { showWorld = false }
+        )
     }
 }
 
@@ -634,6 +776,8 @@ private fun MarkdownInlineText(
 // ─── Inline Span Builder ─────────────────────────────────────────────────────
 // Handles **bold**, *italic*, and `inline code` within a single line.
 
+private const val MARKDOWN_ESCAPABLE = "_*`#~[]>|"
+
 private fun buildInlineAnnotated(
     text: String,
     defaultColor: Color,
@@ -643,6 +787,11 @@ private fun buildInlineAnnotated(
         var i = 0
         while (i < text.length) {
             when {
+                // Backslash escape of a markdown punctuation character: the literal character.
+                text[i] == '\\' && i + 1 < text.length && text[i + 1] in MARKDOWN_ESCAPABLE -> {
+                    append(text[i + 1])
+                    i += 2
+                }
                 text[i] == '[' && (i == 0 || text[i - 1] != '!') -> {
                     val markdownLink = parseMarkdownLinkAt(text, i)
                     if (markdownLink != null) {
@@ -855,6 +1004,9 @@ internal fun knowledgeChunkUriForReferenceAt(text: String, start: Int = 0): Stri
 
 internal fun knowledgeChunkUriForRawUrlAt(text: String, start: Int = 0): String? =
     rawKnowledgeChunkUrlAt(text, start)?.url
+
+internal fun markdownInlineTextForTest(text: String): String =
+    buildInlineAnnotated(text, Color.Unspecified, SpanStyle()).text
 
 internal fun markdownLinkUriForLinkAt(text: String, start: Int = 0): String? =
     parseMarkdownLinkAt(text, start)?.url

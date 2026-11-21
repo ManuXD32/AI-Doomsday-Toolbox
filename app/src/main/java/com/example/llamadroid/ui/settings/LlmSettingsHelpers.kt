@@ -471,3 +471,9 @@ internal fun LlamaLoraStackRow(
         }
     }
 }
+
+/** Slider position shown while the launch temperature is Auto, and the value Auto switches to. */
+internal const val LLM_TEMPERATURE_START = 0.7f
+
+/** Launch temperature at two decimals so slider steps store 0.6, not 0.6000001. */
+internal fun roundLaunchTemperature(value: Float): Float = Math.round(value * 100f) / 100f

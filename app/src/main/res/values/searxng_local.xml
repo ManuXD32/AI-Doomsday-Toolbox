@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="searxng_local_title">In-app SearXNG (experimental)</string>
+    <string name="searxng_local_desc">Runs a private SearXNG search engine inside the Debian environment, reachable only from this phone. Leave the SearXNG address empty to use it.</string>
+    <string name="searxng_local_state_not_installed">Not installed</string>
+    <string name="searxng_local_state_installing">Installing… this can take several minutes</string>
+    <string name="searxng_local_state_stopped">Installed, stopped (starts on the next search)</string>
+    <string name="searxng_local_state_starting">Starting…</string>
+    <string name="searxng_local_state_running">Running on this phone</string>
+    <string name="searxng_local_state_failed">Failed</string>
+    <string name="searxng_local_install">Install SearXNG</string>
+    <string name="searxng_local_start">Start now</string>
+    <string name="searxng_local_stop">Stop</string>
+    <string name="searxng_local_uninstall">Uninstall</string>
+    <string name="searxng_local_show_log">Show log</string>
+    <string name="searxng_local_hide_log">Hide log</string>
+    <string name="searxng_local_log_empty">No log yet.</string>
+    <string name="searxng_local_copy_log">Copy log</string>
+    <string name="searxng_local_log_copied">Log copied.</string>
+    <string name="searxng_local_log_clip_label">SearXNG log</string>
+    <string name="searxng_local_install_title">Install SearXNG?</string>
+    <string name="searxng_local_install_message">This downloads the Debian environment copy (about 200 MB on disk) plus SearXNG and its Python packages (roughly 150 MB more) over the network, so use Wi-Fi.\n\nWhile running it uses RAM next to your model, and it stops itself after 10 idle minutes. Search engines may block or CAPTCHA your phone\'s IP address, so some searches can return nothing and fall back to DuckDuckGo.\n\nThis feature is experimental.</string>
+    <string name="searxng_local_install_confirm">Install</string>
+    <string name="searxng_local_uninstall_title">Uninstall SearXNG?</string>
+    <string name="searxng_local_uninstall_message">This deletes the SearXNG files and its settings. You can install it again later.</string>
+    <string name="searxng_local_cancel">Cancel</string>
+</resources>

@@ -203,6 +203,14 @@ fun ChatScreen(
                 ChatWebViewHolder.loadedUrl = url
             }
             
+            override fun onRenderProcessGone(view: WebView?, detail: RenderProcessGoneDetail?): Boolean {
+                // Renderer died: show the existing error state (with retry) instead of crashing the app.
+                ChatWebViewHolder.isLoaded = false
+                hasError = true
+                isLoading = false
+                return true
+            }
+
             override fun onReceivedError(view: WebView?, request: WebResourceRequest?, error: WebResourceError?) {
                 if (ChatWebViewHolder.activeOrigin == currentChatUrl &&
                     request?.isForMainFrame == true &&

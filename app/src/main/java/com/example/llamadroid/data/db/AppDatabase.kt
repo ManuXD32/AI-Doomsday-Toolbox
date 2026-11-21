@@ -186,9 +186,13 @@ class Converters {
         com.example.llamadroid.data.model.NativeChatDelegateEventEntity::class,
         com.example.llamadroid.data.model.LlamaMessageAttachmentEntity::class,
         com.example.llamadroid.data.model.NativeChatCompactionEntity::class,
-        com.example.llamadroid.data.model.LlamaMessageImageDescriptionEntity::class
+        com.example.llamadroid.data.model.LlamaMessageImageDescriptionEntity::class,
+        com.example.llamadroid.data.model.LlamaMessageCardStateEntity::class,
+        com.example.llamadroid.training.TrainingDatasetEntity::class,
+        com.example.llamadroid.branchy.BranchyRunEntity::class,
+        com.example.llamadroid.branchy.cluster.BranchyClusterDeviceEntity::class
     ],
-    version = 132,
+    version = 139,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -233,6 +237,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun llamaMessageAttachmentDao(): com.example.llamadroid.data.dao.LlamaMessageAttachmentDao
     abstract fun nativeChatCompactionDao(): com.example.llamadroid.data.dao.NativeChatCompactionDao
     abstract fun llamaMessageImageDescriptionDao(): com.example.llamadroid.data.dao.LlamaMessageImageDescriptionDao
+    abstract fun llamaMessageCardStateDao(): com.example.llamadroid.data.dao.LlamaMessageCardStateDao
     abstract fun llamaScheduledTaskDao(): com.example.llamadroid.data.dao.LlamaScheduledTaskDao
     abstract fun llamaSpeculativeRunDao(): com.example.llamadroid.data.dao.LlamaSpeculativeRunDao
     abstract fun organizerDao(): OrganizerDao
@@ -252,6 +257,9 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun audioLibraryDao(): com.example.llamadroid.audio.library.AudioLibraryDao
     abstract fun modelDeletionJournalDao(): com.example.llamadroid.data.model.library.ModelDeletionJournalDao
     abstract fun generationQueueDao(): GenerationQueueDao
+    abstract fun trainingDatasetDao(): com.example.llamadroid.training.TrainingDatasetDao
+    abstract fun branchyRunDao(): com.example.llamadroid.branchy.BranchyRunDao
+    abstract fun branchyClusterDeviceDao(): com.example.llamadroid.branchy.cluster.BranchyClusterDeviceDao
 
     /** Capture runtime ownership once; the global process-owner row remains available on the facade. */
     fun harnessDao(runtimeId: String): HarnessRuntimeDao = HarnessRuntimeDao(harnessDao(), runtimeId)

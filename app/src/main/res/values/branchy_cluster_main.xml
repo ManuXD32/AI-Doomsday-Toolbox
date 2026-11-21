@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Distributed hub -->
+    <string name="branchy_main_hub_section">Branchy training cluster</string>
+    <string name="branchy_main_hub_main_title">Branchy main device (training)</string>
+    <string name="branchy_main_hub_main_desc">Train a Branchy model with the help of other phones on your network.</string>
+    <string name="branchy_main_hub_helper_title">Branchy helper</string>
+    <string name="branchy_main_hub_helper_desc">Lend this phone to the main device of a Branchy training cluster.</string>
+
+    <!-- Wizard: Devices step -->
+    <string name="branchy_main_step_devices">Devices</string>
+    <string name="branchy_main_devices_title">Training devices</string>
+    <string name="branchy_main_devices_hint">Tick helper phones to train together. With none ticked, this phone trains alone. Helpers need the same cluster token and must be running the Branchy helper.</string>
+    <string name="branchy_main_devices_empty">No helpers found yet. Start the Branchy helper on another phone on the same network, or add one by address.</string>
+    <string name="branchy_main_device_forget">Remove from list</string>
+    <string name="branchy_main_device_ram">RAM (MB)</string>
+    <string name="branchy_main_device_gflops">GFLOP/s</string>
+    <string name="branchy_main_device_link">Mbit/s</string>
+    <string name="branchy_main_manual_title">Add by address</string>
+    <string name="branchy_main_manual_hint">Type the helper\'s IP and port, for example 192.168.1.20:50210.</string>
+    <string name="branchy_main_manual_label">IP address and port</string>
+    <string name="branchy_main_manual_add">Add helper</string>
+    <string name="branchy_main_manual_invalid">That is not a valid address. Use IP:port.</string>
+    <string name="branchy_main_mode_title">How to share the work</string>
+    <string name="branchy_main_mode_hint">Memory splits the model branches over the phones so bigger models fit. Speed gives each phone a full copy and trains faster. Auto picks for you.</string>
+    <string name="branchy_main_mode_auto">Auto</string>
+    <string name="branchy_main_mode_branch">Memory (branch-parallel)</string>
+    <string name="branchy_main_mode_data">Speed (data-parallel)</string>
+    <string name="branchy_main_error_need_ram">Enter the free RAM (MB) of these helpers: %1$s</string>
+    <string name="branchy_main_error_missing_endpoints">These planned devices have no known address: %1$s. Add them again in the Devices step.</string>
+
+    <!-- Plan result -->
+    <string name="branchy_main_plan_mode_branch">Mode: branch-parallel. Each helper runs some branches, which saves memory.</string>
+    <string name="branchy_main_plan_mode_data">Mode: data-parallel. Every device trains a full copy and they sync from time to time, which is faster.</string>
+    <string name="branchy_main_plan_speedup">Estimated speed-up: %1$sx</string>
+    <string name="branchy_main_plan_limit">Limited by: %1$s</string>
+    <string name="branchy_main_limit_coordinator">this phone</string>
+    <string name="branchy_main_limit_worker">the slowest helper</string>
+    <string name="branchy_main_limit_link">the network</string>
+    <string name="branchy_main_plan_this_phone">This phone</string>
+    <string name="branchy_main_plan_device_ram">%1$s: %2$s of %3$s</string>
+    <string name="branchy_main_plan_link_slow">The link to %1$s is slow: it needs about %2$s Mbit/s but has %3$s Mbit/s, so the network will limit training.</string>
+
+    <!-- Token card -->
+    <string name="branchy_main_token_title">Cluster token</string>
+    <string name="branchy_main_token_hint">Enter this token on every helper (scan the QR code or paste the text). Keep it private: anyone with it can join your cluster.</string>
+    <string name="branchy_main_token_qr_description">QR code of the cluster token</string>
+    <string name="branchy_main_token_copied">Token copied.</string>
+    <string name="branchy_main_token_regenerate">Regenerate</string>
+    <string name="branchy_main_token_regenerate_title">Regenerate the token?</string>
+    <string name="branchy_main_token_regenerate_body">Every helper will stop accepting this device until you enter the new token on it.</string>
+
+    <!-- Live view -->
+    <string name="branchy_main_live_title">Devices</string>
+    <string name="branchy_main_live_branches">Branches: %1$s</string>
+    <string name="branchy_main_live_lost">Connection lost: %1$s</string>
+    <string name="branchy_main_live_up">Connected</string>
+    <string name="branchy_main_live_down">Lost</string>
+    <string name="branchy_main_live_sync">Sync round %1$s: %2$s exchanged, helpers: %3$s</string>
+</resources>

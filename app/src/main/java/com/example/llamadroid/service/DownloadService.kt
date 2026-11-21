@@ -204,13 +204,26 @@ class DownloadService : Service() {
                 putExtra(EXTRA_RETRY_REQUESTED_AT, retryRequestedAt)
                 putExtra(EXTRA_PRESERVE_RETRY_TIMESTAMP, preserveRetryTimestamp)
             }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                context.startForegroundService(intent)
-            } else {
-                context.startService(intent)
-            }
+            startGuarded(context, intent)
         }
         
+        /** Background-start denial or IllegalStateException must not crash; the download stays resumable. */
+        private fun startGuarded(context: Context, intent: Intent) {
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    context.startForegroundService(intent)
+                } else {
+                    context.startService(intent)
+                }
+            } catch (error: Exception) {
+                if (error is IllegalStateException || error.javaClass.simpleName == "ForegroundServiceStartNotAllowedException") {
+                    DebugLog.log("DownloadService: start refused: ${error.javaClass.simpleName}: ${error.message}")
+                } else {
+                    throw error
+                }
+            }
+        }
+
         fun cancelDownload(context: Context, filename: String, downloadId: String = filename) {
             val intent = Intent(context, DownloadService::class.java).apply {
                 action = ACTION_CANCEL_DOWNLOAD
@@ -235,11 +248,7 @@ class DownloadService : Service() {
                 putExtra(EXTRA_RETRY_REQUESTED_AT, retryRequestedAt)
                 putExtra(EXTRA_PRESERVE_RETRY_TIMESTAMP, preserveRetryTimestamp)
             }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                context.startForegroundService(intent)
-            } else {
-                context.startService(intent)
-            }
+            startGuarded(context, intent)
         }
 
         fun discardDownload(context: Context, downloadId: String) {
@@ -816,6 +825,7 @@ class DownloadService : Service() {
                         db.modelDao().insertModel(entity)
                     }
                     DebugLog.log("DownloadService: Saved $finalFilename to DB as ${pending.type}")
+                    com.example.llamadroid.ui.knowledge.autoSelectEmbeddingAfterDownload(applicationContext, entity)
                     DownloadProgressHolder.removeProgress(progressKey)
                     db.withTransaction {
                         pending.pendingArtifactId?.let { artifactId ->
@@ -858,7 +868,12 @@ class DownloadService : Service() {
                     url = finalUrl,
                     destFile = destFile,
                     context = this@DownloadService,
-                    bearerToken = pending?.huggingFaceToken,
+                    // Branchy training datasets ("dataset:<id>:<n>" task ids) use the app's Hugging Face token so gated
+                    // datasets download; retries and resumes read the token again from the preferences.
+                    bearerToken = pending?.huggingFaceToken
+                        ?: if (resolvedTaskId.startsWith("dataset:")) {
+                            com.example.llamadroid.training.HfToken.read(this@DownloadService).takeIf { it.isNotBlank() }
+                        } else null,
                     downloadId = resolvedTaskId,
                     preservePartialOnCancel = pending?.stageOnly == true
                 )
@@ -1106,14 +1121,14 @@ class DownloadService : Service() {
                                 sourceUrl = finalUrl,
                                 onProgress = progressReporter
                             )
-                            db.withTransaction {
+                            val linkedEntity = db.withTransaction {
                                 pending.pendingArtifactId?.let { artifactId ->
                                     ensurePendingArtifactActive(db.modelLibraryDao(), artifactId)
                                 }
-                                val linkedEntity = linkAudioCompanion(db, entity)
-                                db.modelDao().insertModel(linkedEntity)
+                                linkAudioCompanion(db, entity).also { db.modelDao().insertModel(it) }
                             }
                             DebugLog.log("DownloadService: Saved $finalFilename to DB as ${pending.type}")
+                            com.example.llamadroid.ui.knowledge.autoSelectEmbeddingAfterDownload(applicationContext, linkedEntity)
                         }
                         DownloadProgressHolder.updateProgress(progressKey, 1f)
                         DownloadProgressHolder.updateStatus(progressKey, getString(R.string.onnx_models_phase_completed))

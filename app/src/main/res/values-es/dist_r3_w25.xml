@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="dist_r3_plan_optimal">Óptimo para la red</string>
+    <string name="dist_r3_plan_optimal_desc">Primero este teléfono y luego los ayudantes justos y más grandes. Omite los ayudantes si el modelo cabe aquí.</string>
+    <string name="dist_r3_plan_ram">Proporcional a la memoria</string>
+    <string name="dist_r3_plan_ram_desc">Cada dispositivo seleccionado recibe una parte proporcional a su memoria.</string>
+    <string name="dist_r3_plan_percent">Porcentaje fijo por dispositivo</string>
+    <string name="dist_r3_plan_percent_desc">Tú eliges el porcentaje del modelo de cada dispositivo. Los valores se usan tal cual.</string>
+    <string name="dist_r3_plan_layers">Capas por dispositivo</string>
+    <string name="dist_r3_plan_layers_desc">Tú eliges cuántas capas tiene cada dispositivo. Los valores se usan tal cual.</string>
+    <string name="dist_r3_split_layers_suffix">capas</string>
+    <string name="dist_r3_split_total_percent">Total: %1$d %%</string>
+    <string name="dist_r3_split_total_layers">Capas: %1$d / %2$d</string>
+    <string name="dist_r3_split_total_layers_unknown">Capas: %1$d</string>
+    <string name="dist_r3_split_err_value">Introduce un número entero de al menos 1 para cada dispositivo.</string>
+    <string name="dist_r3_split_err_total_percent">Los porcentajes deben sumar 100 %% (ahora %1$d %%).</string>
+    <string name="dist_r3_split_err_total_layers">Las capas deben sumar %1$d (ahora %2$d).</string>
+    <string name="dist_r3_split_err_zero_layers">%1$s se quedaría sin capas. Sube su parte.</string>
+    <string name="dist_r3_split_fix_first">Corrige los valores del reparto en los ajustes avanzados antes de iniciar.</string>
+    <string name="dist_r3_split_needs_distributed">Los valores manuales se aplican cuando el modelo se reparte entre varios dispositivos.</string>
+</resources>

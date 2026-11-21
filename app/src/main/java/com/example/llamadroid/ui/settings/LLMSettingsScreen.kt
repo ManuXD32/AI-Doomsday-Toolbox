@@ -33,6 +33,7 @@ import com.example.llamadroid.data.binary.BinaryRepository
 import com.example.llamadroid.data.binary.EffectiveLlamaBinary
 import com.example.llamadroid.data.db.AppDatabase
 import com.example.llamadroid.data.db.ModelType
+import com.example.llamadroid.service.LlamaReasoning
 import com.example.llamadroid.service.LlamaSpeculativeMode
 import com.example.llamadroid.service.LlamaLoadMode
 import com.example.llamadroid.service.LlamaLoraSpec
@@ -169,6 +170,11 @@ fun LlmSettingsContent(
     val serverCacheIdleSlots by settingsRepo.serverCacheIdleSlots.collectAsState()
     val serverKvUnifiedMode by settingsRepo.serverKvUnifiedMode.collectAsState()
     val serverSwaFull by settingsRepo.serverSwaFull.collectAsState()
+    val llamaReasoningPreserve by settingsRepo.llamaReasoningPreserve.collectAsState()
+    val llamaReasoningMode by settingsRepo.llamaReasoningMode.collectAsState()
+    val llamaReasoningEffort by settingsRepo.llamaReasoningEffort.collectAsState()
+    var reasoningModeMenuExpanded by remember { mutableStateOf(false) }
+    var reasoningEffortMenuExpanded by remember { mutableStateOf(false) }
     val serverSleepIdleSeconds by settingsRepo.serverSleepIdleSeconds.collectAsState()
     val agentLlamaSlotAffinityMode by settingsRepo.agentLlamaSlotAffinityMode.collectAsState()
     val agentPromptCacheDiagnostics by settingsRepo.agentPromptCacheDiagnostics.collectAsState()
@@ -218,7 +224,8 @@ fun LlmSettingsContent(
     // still empty during initial loading. The effective value is used below in
     // the meantime, so launch validation cannot accept an incompatible path.
     LaunchedEffect(draftModelPath, draftSelectorModels) {
-        if (draftSelectorModels.isNotEmpty() && draftModelPath != effectiveDraftModelPath) {
+        // A saved server profile keeps its draft path as stored; the editor validates it on save.
+        if (isGlobal && draftSelectorModels.isNotEmpty() && draftModelPath != effectiveDraftModelPath) {
             settingsRepo.setDraftModelPath(effectiveDraftModelPath)
         }
     }
@@ -233,7 +240,8 @@ fun LlmSettingsContent(
     // Only disable vision when models are loaded AND no vision capability
     // This prevents race condition where llmModels is initially empty
     LaunchedEffect(hasVisionCapability, llmModels) {
-        if (llmModels.isNotEmpty() && !hasVisionCapability && enableVision) {
+        // A saved server profile keeps its vision/mmproj choice; only the global screen auto-corrects it.
+        if (isGlobal && llmModels.isNotEmpty() && !hasVisionCapability && enableVision) {
             settingsRepo.setEnableVision(false)
         }
     }
@@ -658,6 +666,38 @@ fun LlmSettingsContent(
                                     checked = serverSwaFull,
                                     onCheckedChange = settingsRepo::setServerSwaFull
                                 )
+                                LlmAdvancedToggle(
+                                    title = stringResource(R.string.llm_reasoning_preserve),
+                                    description = stringResource(R.string.llm_reasoning_preserve_desc),
+                                    checked = llamaReasoningPreserve,
+                                    onCheckedChange = settingsRepo::setLlamaReasoningPreserve
+                                )
+                                LlmModeDropdown(
+                                    label = stringResource(R.string.reasoning_mode_title),
+                                    selected = llamaReasoningMode,
+                                    options = LlamaReasoning.SERVER_MODES.map { it to reasoningModeLabel(it) },
+                                    expanded = reasoningModeMenuExpanded,
+                                    onExpandedChange = { reasoningModeMenuExpanded = it },
+                                    onSelected = settingsRepo::setLlamaReasoningMode
+                                )
+                                Text(
+                                    stringResource(R.string.reasoning_mode_desc),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                LlmModeDropdown(
+                                    label = stringResource(R.string.reasoning_effort_title),
+                                    selected = llamaReasoningEffort,
+                                    options = LlamaReasoning.EFFORTS.map { it to reasoningEffortLabel(it) },
+                                    expanded = reasoningEffortMenuExpanded,
+                                    onExpandedChange = { reasoningEffortMenuExpanded = it },
+                                    onSelected = settingsRepo::setLlamaReasoningEffort
+                                )
+                                Text(
+                                    stringResource(R.string.reasoning_effort_desc),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
                                 DraftIntTextField(
                                     value = serverSleepIdleSeconds,
                                     onValueChange = { settingsRepo.setServerSleepIdleSeconds(it) },
@@ -773,23 +813,45 @@ fun LlmSettingsContent(
                     shape = RoundedCornerShape(16.dp)
                 ) {
                     Column(modifier = Modifier.padding(16.dp)) {
+                        val tempAuto = temp < 0f
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text(stringResource(R.string.llm_temperature), fontWeight = FontWeight.Medium)
                             Text(
-                                String.format(java.util.Locale.getDefault(), "%.1f", temp),
+                                stringResource(R.string.llm_temperature),
+                                fontWeight = FontWeight.Medium,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f)
+                            )
+                            Text(
+                                if (tempAuto) stringResource(R.string.llm_temperature_auto)
+                                else String.format(java.util.Locale.getDefault(), "%.2f", temp),
                                 color = MaterialTheme.colorScheme.primary
+                            )
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Switch(
+                                checked = tempAuto,
+                                onCheckedChange = { auto ->
+                                    settingsRepo.setTemperature(if (auto) -1f else LLM_TEMPERATURE_START)
+                                }
                             )
                         }
                         Spacer(modifier = Modifier.height(8.dp))
                         Slider(
-                            value = temp,
-                            onValueChange = { settingsRepo.setTemperature(it) },
+                            value = if (tempAuto) LLM_TEMPERATURE_START else temp,
+                            // Two decimals so the stored value is 0.6, never 0.6000001.
+                            onValueChange = { settingsRepo.setTemperature(roundLaunchTemperature(it)) },
+                            enabled = !tempAuto,
                             valueRange = 0f..2f,
                             steps = 19
+                        )
+                        Text(
+                            stringResource(R.string.llm_temperature_auto_hint),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                 }
@@ -1770,8 +1832,10 @@ fun LlmSettingsContent(
                     items(llmModels) { model ->
                         Surface(
                             onClick = {
+                                // Re-picking the current model must not re-apply that model's defaults over edited options.
+                                val changed = model.path != selectedModelPath
                                 settingsRepo.setSelectedModelPath(model.path)
-                                onModelSelected?.invoke(model)
+                                if (changed) onModelSelected?.invoke(model)
                                 showLlmSelector = false
                             },
                             modifier = Modifier.fillMaxWidth(),

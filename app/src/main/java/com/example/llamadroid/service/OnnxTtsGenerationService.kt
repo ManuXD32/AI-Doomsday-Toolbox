@@ -102,6 +102,7 @@ class OnnxTtsGenerationService : Service() {
                     OnnxTtsGenerationStateStore.update(
                         OnnxTtsGenerationState.Error(getString(R.string.onnx_tts_error_missing_job))
                     )
+                    if (activeJob?.isActive != true) ForegroundStart.satisfyAndStop(this@OnnxTtsGenerationService)
                     stopSelf(startId)
                 } else if (activeJob?.isActive == true) {
                     OnnxTtsGenerationStateStore.update(

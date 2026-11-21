@@ -140,7 +140,8 @@ fun savedCommandFromLaunchProfile(
     commandTemplate = profile.commandTemplate.orEmpty(),
     contextSize = profile.contextSize,
     batchSize = profile.batchSize,
-    temperature = profile.temperature,
+    // The legacy column is non-null; Auto is stored as the old default and read back from the JSON.
+    temperature = profile.temperature ?: 0.7f,
     threads = profile.threads,
     host = profile.host
 )

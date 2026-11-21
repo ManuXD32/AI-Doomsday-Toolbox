@@ -591,12 +591,12 @@ private fun ToolCallGroupBubble(
         Card(
             modifier = Modifier.widthIn(max = 380.dp),
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.8f)),
-            shape = RoundedCornerShape(
+            shape = com.example.llamadroid.ui.theme.TallSafeShape(RoundedCornerShape(
                 topStart = 20.dp,
                 topEnd = 20.dp,
                 bottomStart = 4.dp,
                 bottomEnd = 20.dp
-            ),
+            )),
             elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
             border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f))
         ) {
@@ -939,12 +939,12 @@ fun ChatMessageBubble(
                     else -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.8f)
                 }
             ),
-            shape = RoundedCornerShape(
+            shape = com.example.llamadroid.ui.theme.TallSafeShape(RoundedCornerShape(
                 topStart = 20.dp,
                 topEnd = 20.dp,
                 bottomStart = if (isUser) 20.dp else 4.dp,
                 bottomEnd = if (isUser) 4.dp else 20.dp
-            ),
+            )),
             elevation = CardDefaults.cardElevation(defaultElevation = elevation),
             border = borderStroke
         ) {

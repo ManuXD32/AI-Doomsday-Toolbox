@@ -24,10 +24,16 @@ import com.example.llamadroid.onnx.supertonicLanguageCodes
 import com.example.llamadroid.sd.SdComponentRole
 import com.example.llamadroid.sd.resolvedSdFamily
 import com.example.llamadroid.sd.resolveSdFamilySpec
+import com.example.llamadroid.service.LlamaReasoning
 import com.example.llamadroid.service.NativeChatImageGenerationEngine
+import com.example.llamadroid.ui.settings.LlmModeDropdown
+import com.example.llamadroid.ui.settings.reasoningEffortLabel
+import com.example.llamadroid.ui.settings.reasoningModeLabel
 import com.example.llamadroid.service.NativeChatSdImageToolParams
 import com.example.llamadroid.service.NativeChatToolConfig
 import com.example.llamadroid.service.supportsSdTxt2Img
+import com.example.llamadroid.service.search.WebSearchBackendKind
+import com.example.llamadroid.service.search.WebSearchBackendSettings
 import com.example.llamadroid.ui.ai.llama.LlamaSamplerField
 import com.example.llamadroid.data.db.KnowledgeBaseEntity
 
@@ -45,6 +51,8 @@ internal class ChatSettingsEnv(
     val liteRtContextCap: Int,
     val onOpenKnowledgeBase: () -> Unit,
     val onManageCustomTools: () -> Unit,
+    /** Opens the chat workspace dialog (null in defaults mode / no saved chat). */
+    val onOpenWorkspace: (() -> Unit)? = null,
     /**
      * True when the sections edit a server's "defaults for new chats": chat-only actions and
      * navigation away from the editor (manage custom tools / knowledge bases) are hidden.
@@ -128,6 +136,38 @@ internal fun ChatSettingsState.SamplingSection() {
 
 @Composable
 internal fun ChatSettingsState.ThinkingSection() {
+    if (!activeServerIsLiteRt) {
+        // llama-server: the same tri-state + effort pickers as the server launch settings.
+        var modeOpen by remember { mutableStateOf(false) }
+        var effortOpen by remember { mutableStateOf(false) }
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            LlmModeDropdown(
+                label = stringResource(R.string.chat_thinking_mode_title),
+                selected = thinkingMode,
+                options = LlamaReasoning.CHAT_THINKING_MODES.map { it to reasoningModeLabel(it, chat = true) },
+                expanded = modeOpen,
+                onExpandedChange = { modeOpen = it },
+                onSelected = {
+                    thinkingMode = it
+                    enableThinking = it != LlamaReasoning.THINKING_OFF
+                }
+            )
+            LlmModeDropdown(
+                label = stringResource(R.string.reasoning_effort_title),
+                selected = reasoningEffort,
+                options = LlamaReasoning.EFFORTS.map { it to reasoningEffortLabel(it) },
+                expanded = effortOpen,
+                onExpandedChange = { effortOpen = it },
+                onSelected = { reasoningEffort = it }
+            )
+            Text(
+                text = stringResource(R.string.chat_thinking_effort_hint),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        return
+    }
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier.fillMaxWidth()
@@ -291,10 +331,23 @@ internal fun ChatSettingsState.VoiceCallSection(env: ChatSettingsEnv) {
 @Composable
 internal fun ChatSettingsState.ToolsSection(env: ChatSettingsEnv) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        env.onOpenWorkspace?.takeUnless { env.defaultsMode }?.let { openWorkspace ->
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(stringResource(R.string.native_chat_files_row_title), style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(
+                        stringResource(R.string.native_chat_files_row_desc),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                TextButton(onClick = openWorkspace) { Text(stringResource(R.string.native_chat_files_row_open), maxLines = 1) }
+            }
+        }
         LlamaToolToggleRow(
             label = stringResource(R.string.llama_tools_enable),
             description = stringResource(R.string.llama_tools_enable_desc),
-            checked = effectiveToolsEnabled,
+            checked = chatToolsEnabledByUser,
             enabled = serverAllowsTools,
             onCheckedChange = { toolsEnabled = it }
         )
@@ -305,7 +358,7 @@ internal fun ChatSettingsState.ToolsSection(env: ChatSettingsEnv) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
-        if (effectiveToolsEnabled) {
+        if (chatToolsEnabledByUser) {
         LlamaToolToggleRow(
             label = stringResource(R.string.llama_tool_web_search),
             description = stringResource(R.string.llama_tool_web_search_desc),
@@ -314,6 +367,18 @@ internal fun ChatSettingsState.ToolsSection(env: ChatSettingsEnv) {
             onCheckedChange = { webSearchEnabled = it }
         )
         if (effectiveWebSearchEnabled) {
+            val searchBackendName = stringResource(
+                if (WebSearchBackendSettings(androidx.compose.ui.platform.LocalContext.current).backend == WebSearchBackendKind.SEARXNG) {
+                    R.string.web_search_backend_searxng
+                } else {
+                    R.string.web_search_backend_duckduckgo
+                }
+            )
+            Text(
+                text = stringResource(R.string.web_search_backend_chat_link, searchBackendName),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
             LlamaToolNumberRow(
                 label = stringResource(R.string.llama_tool_pages),
                 value = webSearchMaxPages,
@@ -479,7 +544,14 @@ internal fun ChatSettingsState.ToolsSection(env: ChatSettingsEnv) {
 internal fun ChatSettingsState.KnowledgeBaseSection(env: ChatSettingsEnv) {
     val knowledgeBases = env.knowledgeBases
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        if (effectiveToolsEnabled) {
+        if (!chatToolsEnabledByUser && chatDocumentForcesKnowledgeTools) {
+            Text(
+                text = stringResource(R.string.llama_tool_kb_document_forced_note),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        if (chatToolsEnabledByUser) {
         LlamaToolToggleRow(
             label = stringResource(R.string.llama_tool_knowledge_bases),
             description = stringResource(R.string.llama_tool_knowledge_bases_desc),
@@ -582,7 +654,7 @@ internal fun ChatSettingsState.ImageToolsSection(env: ChatSettingsEnv) {
     val sdImageSupportModels = env.sdImageSupportModels
     val nativeChatBgrModelOptions = env.bgrModelOptions
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        if (effectiveToolsEnabled) {
+        if (chatToolsEnabledByUser) {
         LlamaToolToggleRow(
             label = stringResource(R.string.llama_tool_image_generation),
             description = stringResource(R.string.llama_tool_image_generation_desc),
@@ -796,6 +868,7 @@ private fun ToolsOffHint() {
 /** Advanced: output cap, seed and the LiteRT-only extras (MTP, system prompt). */
 @Composable
 internal fun ChatSettingsState.AdvancedSection(defaultsMode: Boolean = false) {
+    ChatCardsSettingsRow()
     LlamaMaxOutputTokensControl(
         enabled = maxOutputTokensEnabled,
         value = maxOutputTokens,

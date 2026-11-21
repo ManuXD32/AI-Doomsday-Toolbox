@@ -395,10 +395,14 @@ fun AudioWorkspaceScreen(
             dismissButton = {
                 TextButton(onClick = {
                     showMicrophonePermissionDialog = false
-                    context.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
-                        data = Uri.parse("package:${context.packageName}")
-                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    })
+                    runCatching {
+                        context.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                            data = Uri.parse("package:${context.packageName}")
+                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        })
+                    }.onFailure {
+                        com.example.llamadroid.ui.settings.SafeSettingsIntents.showToast(context, com.example.llamadroid.R.string.startup_settings_unavailable)
+                    }
                 }) { Text(stringResource(R.string.audio_workspace_permission_settings)) }
             }
         )

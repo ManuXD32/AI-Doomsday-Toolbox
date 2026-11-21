@@ -453,7 +453,7 @@ data class HarnessTaskDigest(
             return when {
                 seconds < 60 -> "${seconds}s"
                 seconds < 3600 -> "${seconds / 60}m"
-                else -> "${seconds / 3600}h%02dm".format((seconds % 3600) / 60)
+                else -> "${seconds / 3600}h" + "%02dm".format((seconds % 3600) / 60)
             }
         }
 

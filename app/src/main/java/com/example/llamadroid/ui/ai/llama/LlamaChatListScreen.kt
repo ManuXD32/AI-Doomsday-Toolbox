@@ -131,7 +131,6 @@ fun LlamaChatListContent(
 
     var showNewChatSheet by remember { mutableStateOf(false) }
     var showQuickSetupSheet by remember { mutableStateOf(false) }
-    var showTitleGenerationSheet by remember { mutableStateOf(false) }
     var showNewFolderDialog by remember { mutableStateOf(false) }
     var showManageFoldersDialog by remember { mutableStateOf(false) }
     var showPromptProfilesDialog by remember { mutableStateOf(false) }
@@ -297,10 +296,14 @@ fun LlamaChatListContent(
                     )
                 }
                 DropdownMenuItem(
-                    text = { Text(stringResource(R.string.title_generation_menu_item)) },
+                    text = { Text(stringResource(R.string.chat_global_settings_title)) },
                     onClick = {
                         showMoreMenu = false
-                        showTitleGenerationSheet = true
+                        navController.navigate(
+                            com.example.llamadroid.ui.settings.chat.ChatSettingsSection.route(
+                                com.example.llamadroid.ui.settings.chat.ChatSettingsSection.HELPERS
+                            )
+                        )
                     }
                 )
                 DropdownMenuItem(
@@ -558,10 +561,6 @@ fun LlamaChatListContent(
 
     ChatListServerSheets(state = serverSheets, viewModel = serversViewModel, navController = navController)
 
-    if (showTitleGenerationSheet) {
-        com.example.llamadroid.ui.settings.TitleGenerationSheet(onDismiss = { showTitleGenerationSheet = false })
-    }
-
     if (showQuickSetupSheet) {
         com.example.llamadroid.ui.quicksetup.QuickSetupSheet(onDismiss = { showQuickSetupSheet = false })
     }
@@ -598,6 +597,7 @@ fun LlamaChatListContent(
         val chat = chatToEdit!!
         var title by remember { mutableStateOf(chat.title) }
         var systemPrompt by remember { mutableStateOf(chat.systemPrompt ?: "") }
+        var profileNeedsFileTools by remember { mutableStateOf(false) }
 
         AlertDialog(
             onDismissRequest = { chatToEdit = null },
@@ -629,6 +629,7 @@ fun LlamaChatListContent(
                         customProfiles = promptProfiles,
                         onSelected = { selectedProfile ->
                             systemPrompt = selectedProfile.content
+                            profileNeedsFileTools = selectedProfile.requiresFileTools
                         }
                     )
                     LlamaPromptProfileActionsRow(
@@ -653,6 +654,9 @@ fun LlamaChatListContent(
                     onClick = {
                         if (title.isNotBlank()) {
                             viewModel.updateChat(chat, title, chat.contextSize, systemPrompt.ifBlank { null })
+                            if (profileNeedsFileTools) {
+                                viewModel.updateChatApiParams(chat.id, mergeProfileToolParams(chat.apiParams, true))
+                            }
                             chatToEdit = null
                         }
                     }
@@ -1101,7 +1105,8 @@ internal data class LlamaPromptProfileChoice(
     val name: String,
     val content: String,
     val isBuiltIn: Boolean,
-    val customProfile: LlamaChatPromptProfileEntity? = null
+    val customProfile: LlamaChatPromptProfileEntity? = null,
+    val requiresFileTools: Boolean = false
 )
 
 @Composable
@@ -1113,7 +1118,8 @@ private fun llamaPromptProfileChoices(
             key = "builtin_${profile.key}",
             name = stringResource(profile.nameRes),
             content = stringResource(profile.contentRes),
-            isBuiltIn = true
+            isBuiltIn = true,
+            requiresFileTools = profile.requiresFileTools
         )
     }
     val custom = customProfiles.map { profile ->
@@ -1137,6 +1143,7 @@ internal fun LlamaPromptProfilePickerField(
     val profiles = llamaPromptProfileChoices(customProfiles)
     var expanded by remember { mutableStateOf(false) }
     var selectedLabel by remember { mutableStateOf("") }
+    var selectedNeedsFileTools by remember { mutableStateOf(false) }
     val placeholder = stringResource(R.string.llama_prompt_profile_picker_placeholder)
 
     ExposedDropdownMenuBox(
@@ -1175,12 +1182,20 @@ internal fun LlamaPromptProfilePickerField(
                     },
                     onClick = {
                         selectedLabel = profile.name
+                        selectedNeedsFileTools = profile.requiresFileTools
                         expanded = false
                         onSelected(profile)
                     }
                 )
             }
         }
+    }
+    if (selectedNeedsFileTools) {
+        Text(
+            text = stringResource(R.string.llama_prompt_profile_file_tools_note),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
     }
 }
 
@@ -1235,7 +1250,7 @@ private fun LlamaPromptProfileActionsRow(
 }
 
 @Composable
-private fun LlamaPromptProfilesManagerDialog(
+internal fun LlamaPromptProfilesManagerDialog(
     customProfiles: List<LlamaChatPromptProfileEntity>,
     onDismiss: () -> Unit,
     onCreateProfile: (String, String) -> Unit,

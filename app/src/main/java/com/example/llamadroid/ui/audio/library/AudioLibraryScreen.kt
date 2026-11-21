@@ -150,7 +150,7 @@ fun AudioLibraryScreen(
             storageError = true
             emit(AudioLibraryPreferences())
         } }
-    val preferences by preferencesFlow.collectAsState(initial = null)
+    val preferences: AudioLibraryPreferences? by preferencesFlow.collectAsState(initial = null)
     val foldersFlow = remember(library, readRetry) { library.observeFolders()
         .catch {
             storageError = true

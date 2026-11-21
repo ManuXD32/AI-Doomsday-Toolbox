@@ -126,7 +126,7 @@ class CuratedBundleSupportTest {
         // prefix changes cannot create or delete duplicate companion payloads.
         val duplicateIds = files.groupBy { it.id }
             .filterValues { it.size > 1 }
-        assertEquals(setOf("qwen3-tts-17b-mmproj-q8"), duplicateIds.keys)
+        assertEquals(setOf("qwen3-tts-17b-mmproj-q8", "qwen35-4b-3d-coder-mmproj"), duplicateIds.keys)
         duplicateIds.values.forEach { sharedFiles ->
             assertEquals(1, sharedFiles.map { it.artifactIdentity }.distinct().size)
             assertEquals(1, sharedFiles.map { it.sha256 }.distinct().size)

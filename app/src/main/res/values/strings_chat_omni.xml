@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="chat_card_omni_text_placeholder">Type here</string>
+    <string name="chat_card_omni_function_label">f(x) =</string>
+    <string name="chat_card_omni_function_desc">Formula in x: %1$s</string>
+    <string name="chat_card_omni_plot_desc">Graph of %1$s</string>
+    <string name="chat_card_omni_plot_range">x: %1$s to %2$s · y: %3$s to %4$s</string>
+    <string name="chat_card_omni_plot_empty">Nothing to plot for these values</string>
+    <string name="chat_card_omni_table_x">x</string>
+    <string name="chat_card_omni_table_desc">Table of values of %1$s</string>
+    <string name="chat_card_omni_matrix_desc">Matrix %1$s, %2$s rows by %3$s columns</string>
+    <string name="chat_card_omni_matrix_rows">Rows</string>
+    <string name="chat_card_omni_matrix_cols">Columns</string>
+    <string name="chat_card_omni_matrix_op_add">A+B</string>
+    <string name="chat_card_omni_matrix_op_sub">A−B</string>
+    <string name="chat_card_omni_matrix_op_mul">A×B</string>
+    <string name="chat_card_omni_matrix_op_det">det A</string>
+    <string name="chat_card_omni_matrix_op_inv">A⁻¹</string>
+    <string name="chat_card_omni_matrix_op_transpose">Aᵀ</string>
+    <string name="chat_card_omni_matrix_dims">The sizes do not allow this operation.</string>
+    <string name="chat_card_omni_matrix_singular">This matrix has no inverse (determinant is 0).</string>
+    <string name="chat_card_omni_matrix_not_square">This operation needs a square matrix.</string>
+    <string name="chat_card_omni_matrix_invalid">Fill every cell with a number.</string>
+    <string name="chat_card_omni_matrix_scalar">%1$s = %2$s</string>
+    <string name="chat_card_omni_err_unknown">Unknown name: %1$s</string>
+    <string name="chat_card_omni_err_unknown_fn">Unknown function: %1$s</string>
+    <string name="chat_card_omni_err_text">Text cannot be used in a calculation</string>
+    <string name="chat_card_omni_err_else">The formula is missing its else part</string>
+    <string name="chat_card_omni_err_formula">The formula is invalid</string>
+    <plurals name="chat_card_omni_issues_title">
+        <item quantity="one">This card has %1$d problem</item>
+        <item quantity="other">This card has %1$d problems</item>
+    </plurals>
+    <string name="chat_card_omni_issues_fix">Ask to fix</string>
+    <string name="chat_card_omni_issues_message">The card “%1$s” has errors:\n%2$s\nPlease send a corrected card.</string>
+    <string name="chat_card_omni_quiz_score">Score: %1$d/%2$d</string>
+    <string name="chat_card_omni_quiz_correct">%1$s (correct)</string>
+    <string name="chat_card_omni_quiz_wrong">%1$s (your answer, incorrect)</string>
+    <string name="chat_card_omni_card_flip">Tap the card to flip it</string>
+    <string name="chat_card_omni_card_prev">Previous</string>
+    <string name="chat_card_omni_card_next">Next</string>
+    <string name="chat_card_omni_counter">%1$d/%2$d</string>
+    <string name="chat_card_omni_step_counter">Step %1$d/%2$d</string>
+    <string name="chat_card_omni_step_back">Back</string>
+    <string name="chat_card_omni_step_next">Next</string>
+    <string name="chat_card_omni_progress_desc">%1$s: %2$s of %3$s</string>
+    <string name="chat_card_omni_bar_desc">%1$s: %2$s</string>
+    <string name="chat_card_omni_date_pick">Choose a date</string>
+    <string name="chat_card_omni_log_label">Description</string>
+    <string name="chat_card_omni_log_amount">Amount</string>
+    <string name="chat_card_omni_log_add">Add</string>
+    <string name="chat_card_omni_log_delete">Delete %1$s</string>
+    <string name="chat_card_omni_log_total">Total: %1$s</string>
+    <string name="chat_card_omni_log_empty">No entries yet</string>
+    <string name="chat_card_omni_score_add">Add to %1$s</string>
+    <string name="chat_card_omni_score_sub">Subtract from %1$s</string>
+    <string name="chat_card_omni_interval_round">Round %1$d/%2$d</string>
+</resources>

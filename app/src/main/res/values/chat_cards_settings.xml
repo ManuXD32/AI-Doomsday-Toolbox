@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="chat_cards_setting_title">Interactive cards</string>
+    <string name="chat_cards_setting_desc">Lets the model reply with tappable choices, forms, follow-up buttons, maps, charts and other cards instead of plain text only.</string>
+    <plurals name="chat_cards_setting_tokens">
+        <item quantity="one">Adds about %d token to this chat\'s instructions.</item>
+        <item quantity="other">Adds about %d tokens to this chat\'s instructions.</item>
+    </plurals>
+    <plurals name="chat_cards_setting_tokens_global">
+        <item quantity="one">Adds about %d token to the instructions of every chat with cards on.</item>
+        <item quantity="other">Adds about %d tokens to the instructions of every chat with cards on.</item>
+    </plurals>
+    <string name="chat_cards_setting_output_cost">Every card costs more output than plain text, so replies take longer.</string>
+    <string name="chat_cards_setting_map_network">Some cards use the internet when they are shown: maps (OpenStreetMap, Photon), photos (Wikipedia, Openverse) and weather (Open-Meteo).</string>
+    <string name="chat_cards_setting_cache_note">Changing this rebuilds this chat\'s cache once.</string>
+    <string name="chat_cards_default_title">Use in new chats</string>
+    <string name="chat_cards_default_desc">New chats start with interactive cards on. Applies to every chat you create; existing chats keep their own setting.</string>
+</resources>

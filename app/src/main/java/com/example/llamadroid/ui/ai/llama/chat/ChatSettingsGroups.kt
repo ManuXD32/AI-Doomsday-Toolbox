@@ -27,6 +27,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.llamadroid.R
+import com.example.llamadroid.ui.settings.reasoningModeLabel
 
 /**
  * The collapsible groups of the chat settings, shared by the chat's settings sheet and by the
@@ -85,9 +86,13 @@ internal fun ChatSettingsGroupList(
     ChatSettingsGroup(
         key = groupKey("thinking"),
         title = stringResource(R.string.native_chat_settings_section_thinking),
-        summary = stringResource(
-            if (state.enableThinking) R.string.native_chat_settings_on else R.string.native_chat_settings_off
-        )
+        summary = if (state.activeServerIsLiteRt) {
+            stringResource(
+                if (state.enableThinking) R.string.native_chat_settings_on else R.string.native_chat_settings_off
+            )
+        } else {
+            reasoningModeLabel(state.thinkingMode, chat = true)
+        }
     ) { state.ThinkingSection() }
     ChatSettingsGroup(
         key = groupKey("voice"),

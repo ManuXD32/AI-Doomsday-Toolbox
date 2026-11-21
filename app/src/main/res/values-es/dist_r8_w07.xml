@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Pantalla del dispositivo principal, paso 1 (Modelo) -->
+    <string name="sd_r8_w07_workflow_title">¿Qué quieres crear?</string>
+    <string name="sd_r8_w07_workflow_generate">Generar una imagen</string>
+    <string name="sd_r8_w07_workflow_img2img">Imagen a imagen</string>
+    <string name="sd_r8_w07_workflow_upscale">Ampliar una imagen</string>
+    <string name="sd_r8_w07_image_title">Modelo de imagen</string>
+    <string name="sd_r8_w07_upscaler_title">Modelo de ampliación</string>
+    <string name="sd_r8_w07_empty_images">Aún no hay ningún modelo de imagen instalado. Descarga uno para empezar a generar imágenes.</string>
+    <string name="sd_r8_w07_empty_upscalers">Aún no hay ningún modelo de ampliación instalado. Descarga uno para ampliar imágenes.</string>
+    <string name="sd_r8_w07_get_models">Obtener modelos</string>
+    <string name="sd_r8_w07_state_ready">Listo</string>
+    <string name="sd_r8_w07_state_selected">Seleccionado</string>
+    <string name="sd_r8_w07_state_not_installed">No instalado</string>
+    <plurals name="sd_r8_w07_files_missing">
+        <item quantity="one">Falta %d archivo</item>
+        <item quantity="many">Faltan %d archivos</item>
+        <item quantity="other">Faltan %d archivos</item>
+    </plurals>
+    <string name="sd_r8_w07_component_line">%1$s: %2$s</string>
+    <string name="sd_r8_w07_missing_line">Faltan: %1$s</string>
+    <string name="sd_r8_w07_files_title">Archivos del modelo</string>
+    <string name="sd_r8_w07_video_options_title">Opciones de video</string>
+
+    <!-- Paso 2 (Dispositivos) -->
+    <string name="sd_r8_w07_split_title">Cómo se reparte el trabajo</string>
+    <string name="sd_r8_w07_split_local_only">Se ejecuta solo en este teléfono</string>
+    <string name="sd_r8_w07_split_budget">Memoria compartida: %1$s</string>
+    <string name="sd_r8_w07_split_part">%1$s en %2$s</string>
+    <string name="sd_r8_w07_ram_gb">%1$.1f GB</string>
+    <string name="sd_r8_w07_this_phone">este teléfono</string>
+    <plurals name="sd_r8_w07_helpers_on">
+        <item quantity="one">%d Ayudante activado</item>
+        <item quantity="many">%d Ayudantes activados</item>
+        <item quantity="other">%d Ayudantes activados</item>
+    </plurals>
+    <string name="sd_r8_w07_nearby_title">Ayudantes cercanos</string>
+    <string name="sd_r8_w07_helpers_title">Tus Ayudantes</string>
+    <string name="sd_r8_w07_helpers_desc">Un Ayudante es otro dispositivo que presta su memoria y su potencia. Marca uno para usarlo.</string>
+    <string name="sd_r8_w07_helper_online">En línea</string>
+    <string name="sd_r8_w07_helper_offline">Sin respuesta</string>
+    <string name="sd_r8_w07_add_manually">Añadir un Ayudante manualmente</string>
+    <string name="sd_r8_w07_edit_helper">Editar Ayudante</string>
+    <string name="sd_r8_w07_remove_helper">Quitar Ayudante</string>
+    <string name="sd_r8_w07_form_host">Dirección del Ayudante (host o IP)</string>
+    <string name="sd_r8_w07_form_port">Puerto</string>
+    <string name="sd_r8_w07_form_name">Nombre</string>
+    <string name="sd_r8_w07_form_ram">RAM (MB)</string>
+    <string name="sd_r8_w07_form_threads">Hilos</string>
+    <string name="sd_r8_w07_form_add">Añadir Ayudante</string>
+    <string name="sd_r8_w07_form_save">Guardar Ayudante</string>
+    <string name="sd_r8_w07_form_cancel">Cancelar</string>
+    <string name="sd_r8_w07_guide_link">Cómo configurar un Ayudante</string>
+    <string name="sd_r8_w07_this_phone_title">Usar también este teléfono</string>
+    <string name="sd_r8_w07_this_phone_desc">Este teléfono también guarda parte del modelo, junto con tus Ayudantes.</string>
+    <string name="sd_r8_w07_phone_name">Nombre mostrado de este teléfono</string>
+    <string name="sd_r8_w07_advanced_title">Reparto avanzado</string>
+    <string name="sd_r8_w07_this_phone_details">Este teléfono</string>
+    <string name="sd_r8_w07_auto_ram_help">La app da a cada Ayudante un presupuesto de memoria según la RAM que comparte y deja que el generador ajuste el modelo a esos presupuestos.</string>
+    <string name="sd_r8_w07_auto_fit_help">El ajuste automático deja que el generador coloque el modelo por sí mismo. Activa el presupuesto de memoria personalizado de abajo solo si quieres fijar tus propios límites.</string>
+    <string name="sd_r8_w07_manual_help">El modo manual conserva tu lista de Ayudantes pero ignora los campos de reparto. Escribe las opciones de reparto en bruto en las opciones personalizadas del último paso.</string>
+    <string name="sd_r8_w07_max_vram_title">Presupuesto de memoria personalizado</string>
+    <string name="sd_r8_w07_max_vram_desc">Solo para aceleradores compatibles. Los teléfonos suelen usar la RAM que comparte cada Ayudante.</string>
+    <string name="sd_r8_w07_max_vram_warning">Los repartos explícitos por capas, como diffusion=RPC0&amp;RPC1, no pueden usar un presupuesto de memoria para ese módulo. RAM automática fija un presupuesto por Ayudante; Componentes conserva tu mapa de backend explícito.</string>
+</resources>

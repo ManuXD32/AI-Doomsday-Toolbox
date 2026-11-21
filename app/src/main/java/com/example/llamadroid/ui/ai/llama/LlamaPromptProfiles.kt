@@ -2,11 +2,15 @@ package com.example.llamadroid.ui.ai.llama
 
 import androidx.annotation.StringRes
 import com.example.llamadroid.R
+import com.example.llamadroid.service.NativeChatToolConfig
+import org.json.JSONObject
 
 data class LlamaBuiltInPromptProfile(
     val key: String,
     @StringRes val nameRes: Int,
-    @StringRes val contentRes: Int
+    @StringRes val contentRes: Int,
+    /** True when the prompt relies on the chat workspace file tools (search/read/replace), so picking it should turn them on. */
+    val requiresFileTools: Boolean = false
 )
 
 object LlamaBuiltInPromptProfiles {
@@ -21,6 +25,9 @@ object LlamaBuiltInPromptProfiles {
     const val MEETING_SECRETARY = "meeting_secretary"
     const val CREATIVE_IMAGE_DIRECTOR = "creative_image_director"
     const val DATA_ANALYST = "data_analyst"
+    const val WORLD_BUILDER = "world_builder"
+    const val WORLD_CODER = "world_coder"
+    const val WORLD_CODER_GLB = "world_coder_glb"
 
     val all: List<LlamaBuiltInPromptProfile> = listOf(
         LlamaBuiltInPromptProfile(
@@ -77,6 +84,39 @@ object LlamaBuiltInPromptProfiles {
             key = DATA_ANALYST,
             nameRes = R.string.llama_prompt_profile_data_analyst,
             contentRes = R.string.llama_prompt_profile_data_analyst_prompt
+        ),
+        LlamaBuiltInPromptProfile(
+            key = WORLD_BUILDER,
+            nameRes = R.string.llama_prompt_profile_world_builder,
+            contentRes = R.string.llama_prompt_profile_world_builder_prompt,
+            requiresFileTools = true
+        ),
+        // The two 3D coder models are trained on fixed prompts; these carry them verbatim plus an
+        // editing section. Recommended samplers are not part of a profile (no field for them).
+        LlamaBuiltInPromptProfile(
+            key = WORLD_CODER,
+            nameRes = R.string.llama_prompt_profile_world_coder,
+            contentRes = R.string.llama_prompt_profile_world_coder_prompt,
+            requiresFileTools = true
+        ),
+        LlamaBuiltInPromptProfile(
+            key = WORLD_CODER_GLB,
+            nameRes = R.string.llama_prompt_profile_world_coder_glb,
+            contentRes = R.string.llama_prompt_profile_world_coder_glb_prompt,
+            requiresFileTools = true
         )
     )
+}
+
+/**
+ * Merges the effect of picking a prompt profile into a chat's `apiParams` JSON. A profile that
+ * [requiresFileTools] turns on tools and the workspace file tools; any other profile leaves the
+ * params untouched (switching away never turns tools off).
+ */
+internal fun mergeProfileToolParams(apiParams: String?, requiresFileTools: Boolean): String? {
+    if (!requiresFileTools) return apiParams
+    val json = runCatching { apiParams?.takeIf { it.isNotBlank() }?.let(::JSONObject) }.getOrNull() ?: JSONObject()
+    json.put(NativeChatToolConfig.KEY_TOOLS_ENABLED, true)
+    json.put(NativeChatToolConfig.KEY_FILE_TOOLS_ENABLED, true)
+    return json.toString()
 }

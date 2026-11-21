@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="startup_settings_unavailable">Este dispositivo no puede abrir esa pantalla de ajustes. Abre los Ajustes de Android manualmente.</string>
+    <string name="startup_folder_picker_unavailable">Este dispositivo no tiene un selector de carpetas disponible.</string>
+    <string name="startup_folder_permission_failed">No se pudo conservar el acceso a esa carpeta. Elige otra carpeta.</string>
+</resources>
