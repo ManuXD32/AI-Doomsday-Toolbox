@@ -9148,4 +9148,31 @@
     <string name="branchy_recipe_30m_desc">A tiny branchy model (about 30M parameters) for chat and tool calls. Pretrains on about 255M tokens of general text, code and stories, then fine-tunes on about 45M tokens of chat, tool use, code and Spanish.</string>
     <string name="branchy_recipe_120m_title">Mini assistant 120M</string>
     <string name="branchy_recipe_120m_desc">A small branchy model (about 120M parameters) for chat and tool calls. Pretrains on about 1B tokens of general text, code and stories, then fine-tunes on about 180M tokens of chat, tool use, code and Spanish. Needs several days on a phone.</string>
+
+    <!-- 1.00026 bundles -->
+    <string name="sd_bundle_qwen_image_21_turbo_title">Qwen Image 2.1 Turbo · Q4 fast</string>
+    <string name="sd_bundle_qwen_image_21_turbo_desc" tools:ignore="TypographyDashes">Qwen Image 2.1 Turbo Q4 distilled diffusion model: 8 steps at CFG 1 with the qwen-image-2.1-turbo sigma schedule, no negative prompt. Reuses the Qwen3-VL 8B Q4 text encoder, F16 vision projector and BF16 VAE from the Qwen Image 2.1 bundle when they are already installed, so only about 4.2 GB is new. Qwen Image assets use the Qwen Research License (non-commercial); the Qwen3-VL components use Apache-2.0.</string>
+    <string name="sd_bundle_sd15_lcm_title">SD 1.5 · Fast (LCM)</string>
+    <string name="sd_bundle_sd15_lcm_desc">Stable Diffusion 1.5 Q4 plus the LCM-LoRA for SD 1.5. Generates in about 4 steps at CFG 1 with the LCM sampler by applying the LoRA at weight 1. Shares the SD 1.5 checkpoint with the Low-End bundle. Uses the CreativeML Open RAIL-M and OpenRAIL++ licenses.</string>
+    <!-- 1.00026 media pickers -->
+    <string name="media_picker_included_in_main">Included in the main file, not needed (you can still override it)</string>
+    <string name="media_picker_included_in_main_short">Included in the main file</string>
+    <string name="media_picker_other_files">Other installed files (not checked for this model)</string>
+    <string name="media_picker_unverified_selected">Not checked for this model; it may be incompatible.</string>
+    <string name="media_picker_no_files">No installed files of this type</string>
+    <string name="media_picker_add_file">Add file…</string>
+    <string name="media_picker_add_main_file">Add main model file…</string>
+    <string name="media_picker_add_lora">Add LoRA file…</string>
+    <string name="media_picker_import_started">Importing file…</string>
+    <string name="media_picker_import_done">Imported %1$s</string>
+    <string name="media_picker_import_failed">Import failed: %1$s</string>
+    <string name="media_picker_main_contains">This file contains: %1$s</string>
+    <string name="media_picker_main_contains_nothing">No embedded components detected</string>
+    <string name="media_picker_role_required">Required</string>
+    <string name="media_picker_role_optional">Optional</string>
+    <string name="media_picker_unknown_family">Model family unknown: every component is optional and no file is checked for compatibility.</string>
+    <string name="media_picker_img2img_not_supported">This model does not support image-to-image.</string>
+    <string name="media_picker_img2img_needs_projector">Image-to-image with this model needs a vision projector; pick one under Model files.</string>
+    <string name="sd_dist_error_img2img_not_supported">The selected model does not support image-to-image. Switch to Generate or pick another model.</string>
+    <string name="sd_dist_error_img2img_needs_projector">Image-to-image with this model needs a vision projector. Pick one on the Model step.</string>
 </resources>

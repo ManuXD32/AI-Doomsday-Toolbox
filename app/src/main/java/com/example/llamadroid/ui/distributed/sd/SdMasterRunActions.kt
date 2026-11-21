@@ -9,6 +9,7 @@ import com.example.llamadroid.R
 import com.example.llamadroid.data.binary.BinaryRepository
 import com.example.llamadroid.data.db.ModelEntity
 import com.example.llamadroid.data.db.ModelType
+import com.example.llamadroid.sd.sdBundleSigmasFor
 import com.example.llamadroid.sd.matchesSdVideoFamily
 import com.example.llamadroid.sd.resolvedSdFamily
 import com.example.llamadroid.sd.resolvedSdVideoFamily
@@ -168,7 +169,11 @@ private suspend fun startImageRun(
 ): SdMasterStartOutcome {
     val settings = state.settings
     val mode = settings.imageWorkflowMode.toSdMasterImageMode()
-    val issue = sdMasterImageLaunchIssue(settings, sdMasterImageMissingRoles(settings, installed))
+    val issue = sdMasterImageLaunchIssue(
+        settings,
+        sdMasterImageMissingRoles(settings, installed),
+        sdMasterImageImg2ImgBlock(settings, installed)
+    )
     if (issue != null) return blocked(context, vm, issue, state.mode)
 
     vm.resolveWorkerAddresses()
@@ -182,14 +187,16 @@ private suspend fun startImageRun(
     if (mode == SDMode.UPSCALE) {
         launcher.startUpscale(buildSdUpscaleConfig(settings, runtimeConfig, outputPath))
     } else {
-        val family = installed.firstOrNull { it.path == settings.imageModelPath }?.resolvedSdFamily()
+        val mainEntity = installed.firstOrNull { it.path == settings.imageModelPath }
+        val family = mainEntity?.resolvedSdFamily()
         launcher.startImage(
             buildSdImageConfig(
                 settings = settings,
                 runtimeConfig = runtimeConfig,
                 outputPath = outputPath,
                 modelFamily = family?.first?.storedValue,
-                modelVariant = family?.second
+                modelVariant = family?.second,
+                sigmas = mainEntity?.let(::sdBundleSigmasFor).orEmpty()
             )
         )
     }

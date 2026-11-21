@@ -2,11 +2,7 @@
 
 **An offline AI toolbox for Android that turns one phone, or a cluster of old phones, into a local AI workstation.**
 
-Access our new wiki and read all about the app https://adt.manube.org/
-
 Run local LLMs, Whisper transcription, image generation, distributed inference, dataset creation, offline knowledge tools, and AI-powered utilities directly on Android. The project is built for people who care about privacy, edge AI, on-device AI, distributed compute, and squeezing useful work out of old phones instead of leaving them in a drawer.
-
-Read the web guide at [adt.manube.org](https://adt.manube.org/) for the page-by-page walkthrough.
 
 [![Platform](https://img.shields.io/badge/Platform-Android-green.svg)](https://developer.android.com)
 [![Min SDK](https://img.shields.io/badge/Min%20SDK-26-blue.svg)](https://developer.android.com)
@@ -36,7 +32,9 @@ If you are searching for a local LLM on Android, image generation, AI agents to 
 - File Station: a browser-based file manager for your phone's folders over the LAN
 - Guided tours with real controls, screenshots, and feature-by-feature recipes that you can skip, resume, or replay
 - Custom model downloads, full Hugging Face repository browsing, saved links, and your own model bundles
-- Distributed inference features for coordinating multiple Android devices on the same network
+- Distributed inference features for coordinating multiple Android devices on the same network, now including distributed image/video generation and Branchy distributed training
+- Branchy: train a small language model on your phone's CPU, alone or across several devices, then chat with it, quantize it, or export it to GGUF
+- Interactive chat cards and mini-apps, switchable web search (DuckDuckGo or SearXNG), and HTML and three.js 3D previews in native chat
 - Built-in Ollama manager, llama native chat, and remote summary tools
 - Dataset creator that turns text and PDFs into cleaned, rated instruction-answer pairs with Alpaca export
 - Termux + proot tool environment with install helpers, SSH workflows, in-app webview access, and file management
@@ -144,6 +142,15 @@ If you are searching for a local LLM on Android, image generation, AI agents to 
 - Read device names, endpoints, connection states, RAM, allocation, and load in responsive network cards
 - Keep Worker memory status current with a shared two-second sample that runs off the UI thread
 - Share models and services over the local network for offline collaboration
+- Set up distributed chat with a step-by-step main/helper flow, a readable status instead of raw logs, and expert settings grouped under Advanced
+- Choose VPN, LAN, or Auto for each helper, with VPN addresses shown and shared in the helper QR code and automatic switch-over to the other address when the preferred one stops answering
+- Test each helper's connection before starting, and see which helper failed with its address; helpers can lend more memory than the safe estimate with a warning
+- Split a model optimally for the network, proportionally to memory, by fixed percent, or by layers per device, with response times measured and warnings shown
+- Keep helper weight caches so later loads skip the upload; distributed chat turns off llama.cpp context checkpoints and the host prompt cache with helpers because both read memory back over the network
+- Run distributed image and video generation on separate screens with a Model, Devices, and Run flow, per-helper receive progress, phases, time left, a live log, and automatic discovery of helpers on the same Wi-Fi
+- Optionally compress transfers between devices (BF16) when a model is split across phones; results can differ slightly from an unsplit run
+- Run trained Branchy models with distributed inference: the main device exports the model, sends slices to helpers, and starts the chat server
+- Keep distributed pickers complete: installed encoders, projectors, TAEs, LoRAs, and custom files are listed, and distributed image generation loads the bundle's text encoder and vision projector
 <p align="center">
   <img width="31%" alt="Distributed inference screen" src="assets/readme/distributed.webp" />
 </p>
@@ -157,6 +164,15 @@ If you are searching for a local LLM on Android, image generation, AI agents to 
 - Follow the steps view with tool cards, folded thinking, a context ring with auto-compaction, and Stop and Continue that resumes mid-sentence
 - Keep a per-chat disk KV cache for long chats, and use Prepare caches to build bases for the system prompt and tools
 - Attach files to a chat workspace the model can list and read; every image in a message reaches vision models
+- Open the chat workspace from the chat menu to download, delete, or open files, and let the model edit workspace files in place (read a line range, search, replace exact text)
+- Attach documents (PDF, DOCX, ODT, EPUB, XLSX, ODS, CSV, TSV, and legacy DOC and XLS) for document search and full-file reading; if no embedding model is set, the app offers to use an installed one or download a recommended one
+- Switch on optional interactive cards (off by default): question and form cards you answer with a tap, maps, place cards, galleries, weather, budgets, charts, timelines, and more, with a card types gallery where each type can be switched off to save tokens
+- Switch on the mini-app `omni` card (off by default) to get calculators, converters, timers, checklists, quizzes, flashcards, charts, and similar tools built from blocks and drawn directly in the chat, with an "Ask to fix" button when a card has errors
+- Choose web search in Chat settings: DuckDuckGo, your own SearXNG server, or an experimental in-app SearXNG running in the Debian environment, with a Test button that reports results and failing engines
+- Keep everything that applies to all chats in one Chat settings screen: embedding model, vision and title helpers, cards, web search, prompt caches, defaults for new chats, and the DeepSeek cache
+- Set reasoning (auto/on/off) and effort per server and override thinking per chat, and use Keep reasoning so follow-up messages can reuse the cache
+- Run any complete HTML page the model writes, or a 3D three.js world with touch controls, saved in the chat workspace for small in-place fixes and GLB export; the 3D World Builder and 3D Asset Builder bundles are in the model catalog
+- Scroll long code blocks inside the reply and collapse them to a one-line header
 - Use a vision helper to describe images for models without vision, and helper models for chat titles
 - Tune advanced sampling (penalties, typical-p, XTC, DRY, dynamic temperature, Mirostat) with Auto defaults and a reset button
 - Send audio and video directly where the model supports it, with automatic fallback to Whisper or a transcript
@@ -171,6 +187,16 @@ If you are searching for a local LLM on Android, image generation, AI agents to 
   <img width="31%" alt="Servers hub with local and remote servers" src="assets/readme/llama-servers.webp" />
   <img width="31%" alt="Scheduled AI tasks" src="assets/readme/scheduler.webp" />
 </p>
+
+### Training (Branchy)
+
+- Open the Training hub (Quadtrix and Branchy) and a Dataset library with curated bundles, Hugging Face search and download, and file import
+- Train a small Branchy language model on your phone's CPU with a trainer wizard, a background service, and Mini assistant recipes
+- Follow a live dashboard with a progress ring, smoothed loss chart, cluster map, and samples; set run length by epochs and checkpoint frequency
+- Train across devices with a branch-parallel or data-parallel cluster, choosing devices and threads in a Devices step, with per-device Benchmark and load balancing
+- Let helpers join through their own Training screen, with a join window for slow connections, VPN/LAN/Auto addressing, and automatic pause and resume when a device loses the network
+- Resume paused runs, change their devices, save a checkpoint on demand, and free run and helper storage
+- Chat with trained models in native chat and the benchmark, quantize local models, and use Export to GGUF to register a Branchy model in the library; quantized and exported models appear in "Trained & quantized" and never replace the source
 
 ### Bubble Chat
 
@@ -298,6 +324,7 @@ If you are searching for a local LLM on Android, image generation, AI agents to 
 - Keep downloads resumable, with progress, cancellation, retry, and available-space checks
 - Leave uncertain files in Unknown and use the Component type picker when you need to classify them manually
 - Save or edit a model's download source without changing its installed file
+- Find Qwen Image 2.1 Turbo (8 steps at CFG 1, reusing the Qwen Image 2.1 encoder, projector, and VAE) and SD 1.5 Fast (LCM) bundles in the catalog, along with an Embeddings folder (EmbeddingGemma 300M, Qwen3 Embedding 0.6B, Nomic Embed Text v1.5)
 - Create your own bundles from installed models and saved links, including compatible encoders, VAEs, LoRAs, projectors, and companion files
 - Use Download missing to restore a ready bundle while skipping verified installed files
 - Keep saved links and bundle definitions after deleting models, and transfer them through full app backup
@@ -315,6 +342,12 @@ If you are searching for a local LLM on Android, image generation, AI agents to 
 - Select T5, LLM, or combined text encoders according to the model family, with compatible vision, VAE, audio, and motion components where supported
 - Tune prompts, seed, dimensions, frames, frame rate, sampling, reference inputs, caching, tiling, and backend placement
 - Add, remove, reorder, enable, and tune LoRAs, including high-noise assignments where supported
+- Start bundle models with the size, steps, CFG, sampler, and flow shift from their model cards, with size quick picks for the other supported sizes
+- See every installed compatible file in the image and video component pickers (no hidden files); unconfirmed files are listed under "Other installed files"
+- Use "Add file..." in any component picker to import and select a file; the main model card marks parts the file already contains (for example VAE or CLIP-L) as not needed
+- Get a reason when image-to-image is unavailable for a model or for Qwen Image 2.1 without a vision projector
+- Pick video models from ready-made cards with automatic family detection and a "missing files" line
+- Open gallery details to see generation time, whether distribution was used and how many helpers, all settings, and the LoRA list
 - Try the LingBot Dense 1.3B bundle with Qwen3-VL 4B Q4 and `taew2_1`, plus a phone example profile at `256x144`, 9 frames, 4 fps, and 12 steps
 - Keep generation and cancellation controls visible while the form scrolls
 - Save MP4 output with audio when available, keep supported native formats, and retry conversion without losing usable native output
@@ -439,18 +472,15 @@ If you are searching for a local LLM on Android, image generation, AI agents to 
 
 ## Getting Started
 
-### Join The Google Play Beta
+### Install from Google Play (its updates are usually behind the github releases)
 
-If you want the easiest install path, you can join the Google Play beta here:
+[AI Doomsday Toolbox on Google Play](https://play.google.com/store/apps/details?id=com.manuxd32.aidoomsdaytoolbox&pcampaignid=web_share)
 
-[AI Doomsday Toolbox on Google Play](https://play.google.com/store/apps/details?id=com.manuxd32.aidoomsdaytoolbox)
-
-The Google Play version uses an Android App Bundle, so the installation is usually smaller than downloading a universal package manually. Joining the beta also helps a lot by improving testing coverage, surfacing device-specific issues, and making it easier to validate updates before wider releases.
+The Google Play version uses an Android App Bundle, so the installation is usually smaller than downloading a universal package manually.
 
 ### Requirements
 
 - Android 8.0+ (API 26)
-- `arm64-v8a` device
 - More RAM and storage if you plan to run larger local models
 - Additional devices on the same network if you want to experiment with distributed inference and phone-cluster workflows
 

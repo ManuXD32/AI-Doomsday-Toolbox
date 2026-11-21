@@ -1,5 +1,6 @@
 package com.example.llamadroid.data.easy
 
+import com.example.llamadroid.sd.SdBundleGenerationDefaults
 import com.example.llamadroid.service.SamplingMethod
 import com.example.llamadroid.service.SdScheduler
 
@@ -34,20 +35,25 @@ object EasyImagePresets {
      */
     private val sd15Sizes = listOf(512 to 512, 512 to 768, 768 to 512)
 
+    // Steps, CFG and sampler come from the shared bundle defaults; sizes stay Easy's own grid.
+    private val sd15 = checkNotNull(SdBundleGenerationDefaults.forFileId("sd15-q4"))
+    private val sdxlTurbo = checkNotNull(SdBundleGenerationDefaults.forFileId("sdxl-turbo-q4"))
+    private val fluxSchnell = checkNotNull(SdBundleGenerationDefaults.forFileId("flux-schnell-q4"))
+
     val all: List<EasyImagePreset> = listOf(
         EasyImagePreset(
-            EasyImageKind.SD15_SDCPP, steps = 20, cfgScale = 7f,
-            sampler = SamplingMethod.EULER_A, scheduler = SdScheduler.DISCRETE,
+            EasyImageKind.SD15_SDCPP, steps = sd15.steps, cfgScale = sd15.cfg,
+            sampler = sd15.sampler, scheduler = SdScheduler.DISCRETE,
             sizes = sd15Sizes, negativePrompt = SD_NEGATIVE
         ),
         EasyImagePreset(
-            EasyImageKind.SDXL_TURBO, steps = 4, cfgScale = 1f,
-            sampler = SamplingMethod.EULER_A, scheduler = SdScheduler.DISCRETE,
+            EasyImageKind.SDXL_TURBO, steps = sdxlTurbo.steps, cfgScale = sdxlTurbo.cfg,
+            sampler = sdxlTurbo.sampler, scheduler = SdScheduler.DISCRETE,
             sizes = listOf(512 to 512, 768 to 768)
         ),
         EasyImagePreset(
-            EasyImageKind.FLUX_SCHNELL, steps = 4, cfgScale = 1f,
-            sampler = SamplingMethod.EULER, scheduler = SdScheduler.DISCRETE,
+            EasyImageKind.FLUX_SCHNELL, steps = fluxSchnell.steps, cfgScale = fluxSchnell.cfg,
+            sampler = fluxSchnell.sampler, scheduler = SdScheduler.DISCRETE,
             sizes = listOf(512 to 512, 768 to 768, 1024 to 1024)
         ),
         EasyImagePreset(

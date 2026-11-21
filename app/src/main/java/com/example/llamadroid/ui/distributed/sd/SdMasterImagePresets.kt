@@ -12,9 +12,17 @@ import com.example.llamadroid.data.model.SdCuratedBundle
 import com.example.llamadroid.data.model.SdCuratedBundleCatalog
 import com.example.llamadroid.data.model.SdCuratedBundleFile
 import com.example.llamadroid.data.model.installedSdCuratedModel
+import com.example.llamadroid.sd.SdBundleGenerationDefaults
 import com.example.llamadroid.sd.SdComponentRole
+import com.example.llamadroid.sd.SdImageDefaults
+import com.example.llamadroid.sd.SdImg2ImgBlock
+import com.example.llamadroid.sd.sdComponentCandidates
+import com.example.llamadroid.sd.sdRoleModelTypes
+import com.example.llamadroid.sd.sdEffectiveMissingRoles
+import com.example.llamadroid.sd.sdImg2ImgBlock
+import com.example.llamadroid.sd.sdMainEmbeddedRoles
+import com.example.llamadroid.sd.withImageDefaults
 import com.example.llamadroid.sd.SdLoraSpec
-import com.example.llamadroid.sd.effectiveSdCompatProfiles
 import com.example.llamadroid.sd.isSdImageMainModel
 import com.example.llamadroid.sd.resolveSdFamilySpec
 import com.example.llamadroid.sd.resolvedSdFamily
@@ -54,10 +62,11 @@ private fun SdCuratedBundleFile.isImageMain(): Boolean =
 
 private fun SdCuratedBundle.imageMainFile(): SdCuratedBundleFile? = files.firstOrNull { it.isImageMain() }
 
-/** Bundles whose every file maps to an image launch slot; adapter-only starters are left out. */
+/** Bundles whose every file maps to an image launch slot (or is a LoRA); adapter-only starters are left out. */
 private fun catalogImageBundles(): List<SdCuratedBundle> =
     SdCuratedBundleCatalog.bundles.filter { bundle ->
-        bundle.imageMainFile() != null && bundle.files.all { easySdSlotFor(it.modelType) != null }
+        bundle.imageMainFile() != null &&
+            bundle.files.all { easySdSlotFor(it.modelType) != null || it.modelType == ModelType.SD_LORA }
     }
 
 /** Catalog image bundles first, then every other installed image main model. */
@@ -147,8 +156,76 @@ internal fun applyImagePreset(
     lookup: SdBundleFileLookup
 ): SdDistributedMasterSettingsEntity {
     val path = card.mainPath?.takeIf { card.installed } ?: return settings
-    val selection = resolveSdMasterImageSelection(path, installed, lookup) ?: return settings
-    return settings.withImageSelection(selection)
+    if (resolveSdMasterImageSelection(path, installed, lookup) == null) return settings
+    return settings.withImageMainModel(path, card.bundleId, installed, lookup)
+}
+
+private fun curatedFileFor(fileId: String): Pair<SdCuratedBundle, SdCuratedBundleFile>? =
+    SdCuratedBundleCatalog.bundles.firstNotNullOfOrNull { bundle ->
+        bundle.files.firstOrNull { it.id == fileId }?.let { bundle to it }
+    }
+
+/** Drops the installed curated LCM LoRA from the stack (other LoRAs stay); disables LoRA when the stack empties. */
+private fun SdDistributedMasterSettingsEntity.withoutCuratedLcmLora(
+    installed: List<ModelEntity>,
+    lookup: SdBundleFileLookup
+): SdDistributedMasterSettingsEntity {
+    val (bundle, file) = curatedFileFor(SdBundleGenerationDefaults.LCM_LORA_FILE_ID) ?: return this
+    val lcmPath = lookup(bundle, file, installed)?.path ?: return this
+    val stack = imageLoras()
+    val kept = stack.filter { it.path != lcmPath }
+    if (kept.size == stack.size) return this
+    val next = withImageLoras(kept)
+    return if (kept.isEmpty()) next.copy(imageLoraEnabled = false) else next
+}
+
+/** Per-model numbers plus, for LCM-style presets, the installed LoRA at its strength (untouched when absent). */
+private fun SdDistributedMasterSettingsEntity.withModelDefaults(
+    d: SdImageDefaults,
+    installed: List<ModelEntity>,
+    lookup: SdBundleFileLookup
+): SdDistributedMasterSettingsEntity {
+    val base = withImageDefaults(d)
+    val loraId = d.loraFileId ?: return base.withoutCuratedLcmLora(installed, lookup)
+    val (bundle, file) = curatedFileFor(loraId) ?: return base
+    val lora = lookup(bundle, file, installed) ?: return base
+    return base.withImageLoras(listOf(SdLoraSpec(path = lora.path, strength = d.loraStrength)))
+}
+
+/**
+ * The one place a main-model change is applied (picker, preset card, Add main file): components,
+ * per-model defaults, LCM LoRA and the img2img gate. Defaults are written only here, so later user
+ * edits are never overwritten. [bundleId] (the tapped card) wins over the bundle that owns the file.
+ */
+internal fun SdDistributedMasterSettingsEntity.withImageMainModel(
+    path: String,
+    bundleId: String?,
+    installed: List<ModelEntity>,
+    lookup: SdBundleFileLookup = installedLookup
+): SdDistributedMasterSettingsEntity {
+    val selection = resolveSdMasterImageSelection(path, installed, lookup)
+    var next = selection?.let { withImageSelection(it) } ?: copy(imageModelPath = path)
+    val main = installed.firstOrNull { it.path == path }
+    val defaults = SdBundleGenerationDefaults.forBundle(bundleId ?: selection?.bundleId)
+        ?: SdBundleGenerationDefaults.forMain(main)
+    next = if (defaults != null) next.withModelDefaults(defaults, installed, lookup)
+    else next.withoutCuratedLcmLora(installed, lookup)
+    if (next.imageWorkflowMode.equals(MODE_IMG2IMG, ignoreCase = true) &&
+        sdImg2ImgBlock(main, "") == SdImg2ImgBlock.NOT_SUPPORTED
+    ) {
+        next = next.copy(imageWorkflowMode = MODE_TXT2IMG)
+    }
+    return if (next == this) this else next
+}
+
+private const val MODE_TXT2IMG = "TXT2IMG"
+private const val MODE_IMG2IMG = "IMG2IMG"
+
+/** Model type used when importing a file for [role] (curated bundles register SD_LLM and MMPROJ). */
+internal fun sdImportTypeFor(role: SdComponentRole): ModelType = when (role) {
+    SdComponentRole.LLM -> ModelType.SD_LLM
+    SdComponentRole.LLM_VISION -> ModelType.MMPROJ
+    else -> sdRoleModelTypes(role).first()
 }
 
 /** Stored path of one image component slot ("" when unset). */
@@ -189,57 +266,57 @@ internal fun SdDistributedMasterSettingsEntity.withImageComponentPath(
     else -> this
 }
 
-/** Required roles of the selected image model that have no file yet. */
+private fun SdDistributedMasterSettingsEntity.selectedImageMain(installed: List<ModelEntity>): ModelEntity? =
+    installed.firstOrNull { it.path == imageModelPath }
+
+/** Required roles still without a file: required - embedded in the main file - filled (+ projector for gated img2img). */
 internal fun sdMasterImageMissingRoles(
     settings: SdDistributedMasterSettingsEntity,
     installed: List<ModelEntity>
-): List<SdComponentRole> {
-    val spec = installed.firstOrNull { it.path == settings.imageModelPath }?.resolveSdFamilySpec() ?: return emptyList()
-    return spec.requiredRoles.filter { settings.imageComponentPath(it).isBlank() }
-}
+): List<SdComponentRole> = sdEffectiveMissingRoles(
+    main = settings.selectedImageMain(installed),
+    paths = SdComponentRole.entries.associateWith { settings.imageComponentPath(it) },
+    img2img = settings.imageWorkflowMode.equals(MODE_IMG2IMG, ignoreCase = true)
+)
+
+/** Why img2img cannot run with the selected model (null = allowed). */
+internal fun sdMasterImageImg2ImgBlock(
+    settings: SdDistributedMasterSettingsEntity,
+    installed: List<ModelEntity>
+): SdImg2ImgBlock? = sdImg2ImgBlock(settings.selectedImageMain(installed), settings.imageLlmVisionPath)
 
 private val imageComponentRoleOrder = listOf(
     SdComponentRole.VAE, SdComponentRole.TAE, SdComponentRole.CLIP_L, SdComponentRole.CLIP_G,
     SdComponentRole.T5XXL, SdComponentRole.LLM, SdComponentRole.LLM_VISION, SdComponentRole.PHOTOMAKER
 )
 
-/** Pickers data for the Advanced "model files" section: compatible installed files per role. */
+/** Pickers data for the Advanced "model files" section: every installed file per role, MATCH first. */
 internal fun sdMasterImageComponentChoices(
     settings: SdDistributedMasterSettingsEntity,
     installed: List<ModelEntity>
 ): SdDistributedImageComponentChoices {
     val main = installed.firstOrNull { it.path == settings.imageModelPath && it.isSdImageMainModel() }
-    val family = main?.resolvedSdFamily()?.first
-    val variant = main?.resolvedSdFamily()?.second
+    val family = main?.resolvedSdFamily()
     val spec = main?.resolveSdFamilySpec()
-    fun of(type: ModelType) = installed.filter { it.type == type }
-    fun compatible(models: List<ModelEntity>) = filterSdDistributedComponents(models, family, variant)
-    val roles = spec?.let { s ->
-        imageComponentRoleOrder.filter { it in s.requiredRoles || it in s.optionalRoles }
-    }.orEmpty()
-    val compatibleModels = mapOf(
-        SdComponentRole.VAE to compatible(of(ModelType.SD_VAE)),
-        SdComponentRole.TAE to compatible(of(ModelType.SD_TAE)),
-        SdComponentRole.CLIP_L to compatible(of(ModelType.SD_CLIP_L)),
-        SdComponentRole.CLIP_G to compatible(of(ModelType.SD_CLIP_G)),
-        SdComponentRole.T5XXL to compatible(of(ModelType.SD_T5XXL)),
-        SdComponentRole.LLM to compatible(of(ModelType.LLM).filter { it.effectiveSdCompatProfiles().isNotEmpty() }),
-        SdComponentRole.LLM_VISION to compatible(
-            of(ModelType.VISION_PROJECTOR).filter { it.effectiveSdCompatProfiles().isNotEmpty() }
-        ),
-        SdComponentRole.PHOTOMAKER to compatible(of(ModelType.SD_PHOTOMAKER)),
-        SdComponentRole.CONTROLNET to compatible(of(ModelType.SD_CONTROLNET)),
-        SdComponentRole.LORA to compatible(of(ModelType.SD_LORA))
-    )
+    val selected = (imageComponentRoleOrder + SdComponentRole.CONTROLNET).associateWith { settings.imageComponentPath(it) } +
+        (SdComponentRole.LORA to settings.imageLoras().firstOrNull()?.path.orEmpty())
+    // Unknown family: every image role is offered and optional. Known: spec roles plus anything already picked.
+    val roles = if (spec == null) imageComponentRoleOrder else imageComponentRoleOrder.filter {
+        it in spec.requiredRoles || it in spec.optionalRoles || selected[it].orEmpty().isNotBlank()
+    }
+    val candidateRoles = imageComponentRoleOrder + SdComponentRole.CONTROLNET + SdComponentRole.LORA
     return SdDistributedImageComponentChoices(
-        familyLabel = family?.storedValue.orEmpty(),
+        familyLabel = family?.first?.storedValue.orEmpty(),
         spec = spec,
         roles = roles,
-        compatibleModels = compatibleModels,
-        selectedPaths = (imageComponentRoleOrder + SdComponentRole.CONTROLNET).associateWith { settings.imageComponentPath(it) } +
-            (SdComponentRole.LORA to settings.imageLoras().firstOrNull()?.path.orEmpty()),
+        requiredRoles = spec?.requiredRoles?.toSet().orEmpty(),
+        embeddedRoles = sdMainEmbeddedRoles(main),
+        candidates = candidateRoles.associateWith { sdComponentCandidates(main, installed, it) },
+        selectedPaths = selected,
         controlNetEnabled = settings.imageControlNetEnabled,
         loraEnabled = settings.imageLoraEnabled,
-        loraApplyMode = settings.imageLoraApplyMode
+        loraApplyMode = settings.imageLoraApplyMode,
+        mainFamily = family?.first?.storedValue,
+        mainVariant = family?.second
     )
 }

@@ -54,7 +54,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.llamadroid.R
 import com.example.llamadroid.data.db.ModelEntity
+import com.example.llamadroid.sd.SdComponentCandidate
 import com.example.llamadroid.sd.SdLoraApplyMode
+import com.example.llamadroid.sd.sdVideoRoleModelTypes
 import com.example.llamadroid.sd.SdLoraSpec
 import com.example.llamadroid.sd.SdVideoAudioCodec
 import com.example.llamadroid.sd.SdVideoComponentPaths
@@ -68,7 +70,6 @@ import com.example.llamadroid.sd.SdVideoNativeOutputFormat
 import com.example.llamadroid.sd.SdVideoOutputFormat
 import com.example.llamadroid.sd.SdVideoPromptFormat
 import com.example.llamadroid.sd.SdVideoWorkflow
-import com.example.llamadroid.sd.matchesSdVideoFamily
 import com.example.llamadroid.sd.pathFor
 import com.example.llamadroid.service.VideoRuntimeOptions
 import com.example.llamadroid.service.SdBinaryCapabilities
@@ -84,7 +85,7 @@ fun VideoRuntimeOptionsEditor(
     options: VideoRuntimeOptions,
     onOptionsChange: (VideoRuntimeOptions) -> Unit,
     modifier: Modifier = Modifier,
-    componentModels: Map<SdVideoComponentRole, List<ModelEntity>> = emptyMap(),
+    componentModels: Map<SdVideoComponentRole, List<SdComponentCandidate>> = emptyMap(),
     loraModels: List<ModelEntity> = emptyList(),
     loras: List<SdLoraSpec> = emptyList(),
     highNoiseLoras: List<SdLoraSpec> = emptyList(),
@@ -478,12 +479,16 @@ private fun ComponentPathsEditor(
     profile: SdVideoFamilyProfile?,
     workflow: SdVideoWorkflow,
     paths: SdVideoComponentPaths,
-    models: Map<SdVideoComponentRole, List<ModelEntity>>,
+    models: Map<SdVideoComponentRole, List<SdComponentCandidate>>,
     availability: VideoUiAvailability,
     uncondDiffusionModels: List<ModelEntity>,
     ipAdapterModels: List<ModelEntity>,
     onPathsChange: (SdVideoComponentPaths) -> Unit
 ) {
+    var importRole by remember { mutableStateOf<SdVideoComponentRole?>(null) }
+    val importFile = rememberSdComponentImporter { imported ->
+        importRole?.let { onPathsChange(paths.withPath(it, imported.path)) }
+    }
     Text(stringResource(R.string.video_controls_components), style = MaterialTheme.typography.titleSmall)
     videoComponentRequirementGroups(profile, workflow, paths).forEach { group ->
         Text(
@@ -517,24 +522,25 @@ private fun ComponentPathsEditor(
             )
         }
         group.roles.forEach { role ->
-            val allModels = models[role].orEmpty()
-            val compatibleModels = if (profile == null) {
-                allModels
-            } else {
-                allModels.filter { it.matchesSdVideoFamily(profile.family, profile.variant) }
-            }
-            val path = paths.pathFor(role).orEmpty()
-            val selectedModel = selectedVideoModel(path, allModels)
-            val incompatible = group.kind == VideoComponentRequirementKind.INCOMPATIBLE ||
-                (selectedModel != null && compatibleModels.none { it.path == selectedModel.path })
-            VideoModelPathField(
+            val candidates = models[role].orEmpty()
+            val enabled = role.cliFlag?.let(availability::isFlagEnabled) ?: true
+            ComponentCandidatePicker(
                 label = videoComponentLabel(role),
-                value = path,
-                models = compatibleModels,
-                allModels = allModels,
-                enabled = role.cliFlag?.let(availability::isFlagEnabled) ?: true,
-                incompatible = incompatible,
-                onValueChange = { onPathsChange(paths.withPath(role, it)) }
+                candidates = candidates,
+                selectedPath = paths.pathFor(role).orEmpty(),
+                onSelectedPath = { onPathsChange(paths.withPath(role, it)) },
+                required = group.kind == VideoComponentRequirementKind.REQUIRED,
+                includedInMain = false,
+                onAddFile = if (enabled) {
+                    {
+                        importRole = role
+                        importFile(
+                            sdVideoRoleModelTypes(role).first(),
+                            profile?.family?.storedValue,
+                            profile?.variant
+                        )
+                    }
+                } else null
             )
         }
     }

@@ -8,6 +8,7 @@ import com.example.llamadroid.data.db.SD_CAPABILITY_IMG2IMG
 import com.example.llamadroid.data.db.SD_CAPABILITY_TXT2IMG
 import com.example.llamadroid.data.db.SD_CAPABILITY_VID_GEN
 import com.example.llamadroid.data.db.buildSdCapabilities
+import com.example.llamadroid.sd.matchesSdFamily
 import com.example.llamadroid.service.DownloadService
 import java.io.File
 import java.net.URLEncoder
@@ -337,6 +338,34 @@ private val QWEN_IMAGE_21_VISION_F16 = SdCuratedBundleFile(
     componentRole = "llm_vision"
 )
 
+private val QWEN_IMAGE_21_TURBO_Q4 = SdCuratedBundleFile(
+    id = "qwen-image-21-turbo-q4",
+    repoId = "unsloth/Qwen-Image-2.1-Turbo-GGUF",
+    remotePath = "qwen-image-2.1-turbo-Q4_K_M.gguf",
+    modelType = ModelType.SD_DIFFUSION,
+    sizeBytes = 4_199_565_120L,
+    sha256 = "8940e8b522af886e0c0f5afddf720e82dd223cb9a43580b5f61c4d740452ac20",
+    licenseLabel = "Qwen Research License",
+    sdCapabilities = buildSdCapabilities(SD_CAPABILITY_TXT2IMG, SD_CAPABILITY_IMG2IMG),
+    sdFamily = "qwen_image",
+    sdVariant = "2.1",
+    sdCompatProfiles = "qwen_image:2.1",
+    componentRole = "diffusion"
+)
+
+private val LCM_LORA_SD15 = SdCuratedBundleFile(
+    id = "lcm-lora-sd15",
+    repoId = "latent-consistency/lcm-lora-sdv1-5",
+    remotePath = "pytorch_lora_weights.safetensors",
+    modelType = ModelType.SD_LORA,
+    sizeBytes = 134_621_556L,
+    sha256 = "8f90d840e075ff588a58e22c6586e2ae9a6f7922996ee6649a7f01072333afe4",
+    licenseLabel = "OpenRAIL++",
+    sdFamily = "checkpoint",
+    sdVariant = "sd1",
+    sdCompatProfiles = "checkpoint:sd1"
+)
+
 /** The former curated Q8 filename remains verifiable and usable by installed rows. */
 private val SD_CURATED_COMPATIBILITY_FILES = listOf(QWEN_IMAGE_21_VISION_Q8)
 
@@ -459,6 +488,32 @@ object SdCuratedBundleCatalog {
             )
         ),
         SdCuratedBundle(
+            id = "qwen-image-21-turbo",
+            titleRes = R.string.sd_bundle_qwen_image_21_turbo_title,
+            descriptionRes = R.string.sd_bundle_qwen_image_21_turbo_desc,
+            installPrefix = "Qwen-Image-2.1-Turbo",
+            // Encoder, projector and VAE are the base bundle's entries: the SHA fallback in
+            // installedSdCuratedModel reuses them, so only the Turbo diffusion file is new.
+            files = listOf(
+                QWEN_IMAGE_21_TURBO_Q4,
+                QWEN_IMAGE_21_TEXT_Q4,
+                QWEN_IMAGE_21_VISION_F16,
+                QWEN_IMAGE_21_VAE
+            ),
+            commandContract = SdCommandContract(
+                requiredFlags = setOf("--diffusion-model", "--llm", "--llm_vision", "--vae", "--sigmas"),
+                optionalFlags = setOf("--offload-to-cpu"),
+                supportsCpuOffload = true,
+            )
+        ),
+        SdCuratedBundle(
+            id = "sd15-lcm",
+            titleRes = R.string.sd_bundle_sd15_lcm_title,
+            descriptionRes = R.string.sd_bundle_sd15_lcm_desc,
+            installPrefix = "SD15-LCM",
+            files = listOf(SD15_Q4, LCM_LORA_SD15)
+        ),
+        SdCuratedBundle(
             id = "photo-upscale-2x",
             titleRes = R.string.sd_bundle_upscale_photo_2x_title,
             descriptionRes = R.string.sd_bundle_upscale_photo_2x_desc,
@@ -536,6 +591,22 @@ fun SdCuratedBundleFile.installedSdCuratedModel(
         usable(model) && SdCuratedBundleCatalog.fileForLocalFilename(model.filename)
             ?.sha256
             ?.equals(sha256, ignoreCase = true) == true
+    } ?: compatibleInstalledProjector(installedModels)
+}
+
+/**
+ * A vision-projector entry (Q8 or F16) is satisfied by any installed projector that is family
+ * compatible, so a Q8 file already installed does not make the F16 entry look missing.
+ */
+private fun SdCuratedBundleFile.compatibleInstalledProjector(
+    installedModels: List<com.example.llamadroid.data.db.ModelEntity>
+): com.example.llamadroid.data.db.ModelEntity? {
+    if (componentRole != "llm_vision") return null
+    val family = com.example.llamadroid.sd.SdModelFamily.fromStoredValue(sdFamily) ?: return null
+    return installedModels.firstOrNull { model ->
+        (model.type == ModelType.MMPROJ || model.type == ModelType.VISION_PROJECTOR) &&
+            File(model.path).isFile &&
+            model.matchesSdFamily(family, sdVariant)
     }
 }
 

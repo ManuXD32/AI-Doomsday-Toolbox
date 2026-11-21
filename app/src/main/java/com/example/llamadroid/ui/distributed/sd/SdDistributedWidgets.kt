@@ -49,14 +49,12 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.llamadroid.R
-import com.example.llamadroid.data.db.ModelEntity
 import com.example.llamadroid.data.db.SdDistributedTemplateEntity
 import com.example.llamadroid.data.db.SdDistributedWorkerEntity
 import com.example.llamadroid.ui.components.NetInterfacePrefChips
 import com.example.llamadroid.sd.SdComponentRole
-import com.example.llamadroid.sd.SdModelFamily
 import com.example.llamadroid.sd.SdModelFamilySpec
-import com.example.llamadroid.sd.matchesSdFamily
+import com.example.llamadroid.sd.SdComponentCandidate
 import com.example.llamadroid.service.SDMode
 import com.example.llamadroid.service.SdDistributedAutoRamScope
 import com.example.llamadroid.service.SdDistributedPlacementMode
@@ -500,15 +498,6 @@ internal fun modulesForWorker(
         }
 }
 
-internal fun filterSdDistributedComponents(
-    models: List<ModelEntity>,
-    family: SdModelFamily?,
-    variant: String?
-): List<ModelEntity> {
-    if (family == null) return emptyList()
-    return models.filter { it.matchesSdFamily(family, variant) }
-}
-
 internal fun sdDistributedComponentRoleLabelRes(role: SdComponentRole): Int = when (role) {
     SdComponentRole.MAIN_MODEL -> R.string.imagegen_component_main_model
     SdComponentRole.VAE -> R.string.imagegen_component_vae
@@ -524,23 +513,6 @@ internal fun sdDistributedComponentRoleLabelRes(role: SdComponentRole): Int = wh
     SdComponentRole.CLIP_VISION -> R.string.sd_type_clip_vision
     SdComponentRole.IP_ADAPTER -> R.string.sd_type_ip_adapter
     SdComponentRole.UPSCALER -> R.string.imagegen_component_upscaler
-}
-
-internal fun sdDistributedEmptyComponentMessageRes(role: SdComponentRole): Int = when (role) {
-    SdComponentRole.VAE -> R.string.imagegen_no_vae_installed
-    SdComponentRole.TAE -> R.string.imagegen_no_tae_installed
-    SdComponentRole.CLIP_L -> R.string.imagegen_no_clip_l
-    SdComponentRole.CLIP_G -> R.string.imagegen_no_clip_g
-    SdComponentRole.T5XXL -> R.string.imagegen_no_t5xxl
-    SdComponentRole.LLM -> R.string.imagegen_no_llm
-    SdComponentRole.LLM_VISION -> R.string.imagegen_no_llm_vision
-    SdComponentRole.CONTROLNET -> R.string.imagegen_no_controlnet
-    SdComponentRole.LORA -> R.string.imagegen_no_lora
-    SdComponentRole.PHOTOMAKER -> R.string.imagegen_no_photomaker
-    SdComponentRole.CLIP_VISION -> R.string.imagegen_ip_adapter_no_clip_vision_models
-    SdComponentRole.IP_ADAPTER -> R.string.imagegen_ip_adapter_no_adapter_models
-    SdComponentRole.MAIN_MODEL,
-    SdComponentRole.UPSCALER -> R.string.sd_dist_no_models_available
 }
 
 internal fun sdDistributedComponentRoleLabel(context: Context, role: SdComponentRole): String =
@@ -577,16 +549,20 @@ internal fun placementModeDescription(mode: SdDistributedPlacementMode): String 
 
 internal enum class SdDistributedTemplateWorkflow { IMAGE, VIDEO }
 
-/** Compatible installed files and current picks for the image component pickers of the Model step. */
+/** Installed candidates (MATCH first, nothing hidden) and current picks for the image component pickers. */
 internal data class SdDistributedImageComponentChoices(
     val familyLabel: String,
     val spec: SdModelFamilySpec?,
     val roles: List<SdComponentRole>,
-    val compatibleModels: Map<SdComponentRole, List<ModelEntity>>,
+    val requiredRoles: Set<SdComponentRole>,
+    val embeddedRoles: Set<SdComponentRole>,
+    val candidates: Map<SdComponentRole, List<SdComponentCandidate>>,
     val selectedPaths: Map<SdComponentRole, String>,
     val controlNetEnabled: Boolean,
     val loraEnabled: Boolean,
-    val loraApplyMode: String
+    val loraApplyMode: String,
+    val mainFamily: String? = null,
+    val mainVariant: String? = null
 )
 
 /** Compact label + value chip in the render-farm dark look (the generated-media gallery counters). */

@@ -99,7 +99,7 @@ import com.example.llamadroid.sd.SdTaeCheck
 import com.example.llamadroid.sd.SdVideoInputs
 import com.example.llamadroid.sd.SdVideoWorkflow
 import com.example.llamadroid.sd.isSdVideoMainModel
-import com.example.llamadroid.sd.matchesSdVideoFamily
+import com.example.llamadroid.sd.sdVideoComponentCandidates
 import com.example.llamadroid.sd.resolvedSdVideoFamily
 import com.example.llamadroid.sd.toJsonArray
 import com.example.llamadroid.sd.toSdLoraSpecs
@@ -231,29 +231,21 @@ fun VideoGenScreen(navController: NavController, initialTab: String = "create") 
 
     var selectedVideoModelPath by remember { mutableStateOf(restoredDraft?.optString("model").orEmpty().ifBlank { null }) }
     val selectedVideoModel = availableVideoModels.firstOrNull { it.path == selectedVideoModelPath }
-    val compatibleVideoLoraModels = remember(loraModels, selectedVideoModel) {
-        val (family, variant) = selectedVideoModel?.resolvedSdVideoFamily() ?: (null to null)
-        family?.let { selectedFamily ->
-            loraModels.filter { it.matchesSdVideoFamily(selectedFamily, variant) }
-        }.orEmpty()
+    val installedVideoPool = remember(
+        videoGenModels, vaeModels, taeModels, t5xxlModels, llmModels, llmVisionModels, audioVaeModels,
+        embeddingsConnectorModels, motionModuleModels, upscalerModels, controlNetModels, clipVisionModels, loraModels
+    ) {
+        (videoGenModels + vaeModels + taeModels + t5xxlModels + llmModels + llmVisionModels + audioVaeModels +
+            embeddingsConnectorModels + motionModuleModels + upscalerModels + controlNetModels +
+            clipVisionModels + loraModels).distinctBy { it.path }
     }
-    val videoComponentModels = remember(videoGenModels, vaeModels, taeModels, t5xxlModels, llmModels, llmVisionModels, audioVaeModels, embeddingsConnectorModels, motionModuleModels, upscalerModels, controlNetModels, clipVisionModels) {
-        mapOf(
-            SdVideoComponentRole.DIFFUSION_MODEL to availableVideoModels,
-            SdVideoComponentRole.FULL_MODEL to availableVideoModels,
-            SdVideoComponentRole.HIGH_NOISE_DIFFUSION_MODEL to availableVideoModels,
-            SdVideoComponentRole.VAE to vaeModels,
-            SdVideoComponentRole.TAE to taeModels,
-            SdVideoComponentRole.T5XXL to t5xxlModels,
-            SdVideoComponentRole.LLM to llmModels,
-            SdVideoComponentRole.LLM_VISION to llmVisionModels,
-            SdVideoComponentRole.AUDIO_VAE to audioVaeModels,
-            SdVideoComponentRole.EMBEDDINGS_CONNECTORS to embeddingsConnectorModels,
-            SdVideoComponentRole.MOTION_MODULE to motionModuleModels,
-            SdVideoComponentRole.HIRES_UPSCALER to upscalerModels,
-            SdVideoComponentRole.CONTROL_NET to controlNetModels,
-            SdVideoComponentRole.CLIP_VISION to clipVisionModels
-        )
+    val videoComponentModels = remember(installedVideoPool, selectedVideoModel) {
+        SdVideoComponentRole.entries.associateWith {
+            sdVideoComponentCandidates(selectedVideoModel, installedVideoPool, it)
+        }
+    }
+    val compatibleVideoLoraModels = remember(videoComponentModels) {
+        videoComponentModels[SdVideoComponentRole.LORA].orEmpty().map { it.model }
     }
     val installedVideoSdModels = remember(
         videoGenModels, vaeModels, taeModels, t5xxlModels, llmModels, llmVisionModels,

@@ -86,9 +86,7 @@ import com.example.llamadroid.sd.resolveSdParamsBackendProfileForArtifacts
 import com.example.llamadroid.sd.SdRuntimeBackendMode
 import com.example.llamadroid.sd.SdArtifactInspection
 import com.example.llamadroid.sd.SdMainLayout
-import com.example.llamadroid.sd.effectiveSdCompatProfiles
-import com.example.llamadroid.sd.orderQwenImage21TextEncoders
-import com.example.llamadroid.sd.orderQwenImage21VisionProjectors
+import com.example.llamadroid.sd.sdBundleSigmasFor
 import com.example.llamadroid.sd.isSdImageMainModel
 import com.example.llamadroid.sd.matchesSdFamily
 import com.example.llamadroid.sd.resolveSdFamilySpec
@@ -603,54 +601,25 @@ fun ImageGenScreen(
     } ?: emptyList()
     val requiredComponentRoles = selectedPipeline?.requiredExternalRoles
         ?: selectedFamilySpec?.requiredRoles.orEmpty()
-    val compatibleVaeModels = filterSdComponents(vaeModels, selectedFamily, selectedVariant)
-    val compatibleTaeModels = filterSdComponents(taeModels, selectedFamily, selectedVariant)
-    val compatibleClipLModels = filterSdComponents(clipLModels, selectedFamily, selectedVariant)
-    val compatibleClipGModels = filterSdComponents(clipGModels, selectedFamily, selectedVariant)
-    val compatibleT5xxlModels = filterSdComponents(t5xxlModels, selectedFamily, selectedVariant)
-    val filteredCompatibleLlmModels = filterSdComponents(
-        imageSupportModels.filter {
-            (it.type == ModelType.LLM || it.type == ModelType.SD_LLM) &&
-                it.effectiveSdCompatProfiles().isNotEmpty()
-        },
-        selectedFamily,
-        selectedVariant
-    )
-    val compatibleLlmModels = if (isQwenImage21) {
-        orderQwenImage21TextEncoders(filteredCompatibleLlmModels)
-    } else {
-        filteredCompatibleLlmModels
-    }
-    val filteredCompatibleLlmVisionModels = filterSdComponents(
-        imageSupportModels.filter {
-            it.type == ModelType.VISION_PROJECTOR || it.type == ModelType.MMPROJ
-        }.filter { it.effectiveSdCompatProfiles().isNotEmpty() },
-        selectedFamily,
-        selectedVariant
-    )
-    val compatibleLlmVisionModels = if (isQwenImage21) {
-        orderQwenImage21VisionProjectors(filteredCompatibleLlmVisionModels)
-    } else {
-        filteredCompatibleLlmVisionModels
-    }
-    val compatibleControlNetModels = filterSdComponents(controlNetModels, selectedFamily, selectedVariant)
-    val compatibleLoraModels = filterSdComponents(loraModels, selectedFamily, selectedVariant)
+    fun candidates(pool: List<ModelEntity>, role: SdComponentRole) =
+        imageGenComponentModels(selectedMainModel, pool, role)
+    val compatibleVaeModels = candidates(vaeModels, SdComponentRole.VAE)
+    val compatibleTaeModels = candidates(taeModels, SdComponentRole.TAE)
+    val compatibleClipLModels = candidates(clipLModels, SdComponentRole.CLIP_L)
+    val compatibleClipGModels = candidates(clipGModels, SdComponentRole.CLIP_G)
+    val compatibleT5xxlModels = candidates(t5xxlModels, SdComponentRole.T5XXL)
+    val compatibleLlmModels = candidates(imageSupportModels, SdComponentRole.LLM)
+    val compatibleLlmVisionModels = candidates(imageSupportModels, SdComponentRole.LLM_VISION)
+    val compatibleControlNetModels = candidates(controlNetModels, SdComponentRole.CONTROLNET)
+    val compatibleLoraModels = candidates(loraModels, SdComponentRole.LORA)
     val compatibleTextualInversionModels = filterSdComponents(
         textualInversionModels,
         selectedFamily,
         selectedVariant
     )
-    val compatiblePhotoMakerModels = filterSdComponents(photoMakerModels, selectedFamily, selectedVariant)
-    val compatibleClipVisionModels = filterSdComponents(
-        clipVisionModels,
-        selectedFamily,
-        selectedVariant
-    )
-    val compatibleIpAdapterModels = filterSdComponents(
-        ipAdapterModels,
-        selectedFamily,
-        selectedVariant
-    )
+    val compatiblePhotoMakerModels = candidates(photoMakerModels, SdComponentRole.PHOTOMAKER)
+    val compatibleClipVisionModels = candidates(clipVisionModels, SdComponentRole.CLIP_VISION)
+    val compatibleIpAdapterModels = candidates(ipAdapterModels, SdComponentRole.IP_ADAPTER)
     // The run-screen profile is reconstructed from the artifacts that are
     // actually selected. Keep each artifact's own preference scoped to the
     // modules it can own; a VAE must never inherit diffusion/text-encoder
@@ -838,10 +807,10 @@ fun ImageGenScreen(
             selectedPhotoMakerPath = null
         }
         if (isQwenImage21) {
-            if (selectedVaePath.isNullOrBlank()) selectedVaePath = compatibleVaeModels.firstOrNull()?.path
-            if (selectedLlmPath.isNullOrBlank()) selectedLlmPath = compatibleLlmModels.firstOrNull()?.path
+            if (selectedVaePath.isNullOrBlank()) selectedVaePath = firstMatchPath(selectedMainModel, vaeModels, SdComponentRole.VAE)
+            if (selectedLlmPath.isNullOrBlank()) selectedLlmPath = firstMatchPath(selectedMainModel, imageSupportModels, SdComponentRole.LLM)
             if (selectedLlmVisionPath.isNullOrBlank()) {
-                selectedLlmVisionPath = compatibleLlmVisionModels.firstOrNull()?.path
+                selectedLlmVisionPath = firstMatchPath(selectedMainModel, imageSupportModels, SdComponentRole.LLM_VISION)
             }
         }
         if (cleared.isNotEmpty()) {
@@ -1366,6 +1335,11 @@ fun ImageGenScreen(
     var cfgScale by remember { mutableFloatStateOf((restoredDraft?.optDouble("cfg", 7.0) ?: 7.0).toFloat()) }
     var seed by remember { mutableLongStateOf(restoredDraft?.optLong("seed", -1L) ?: -1L) }
     var selectedSampler by remember { mutableStateOf(SamplingMethod.entries.firstOrNull { it.name == restoredDraft?.optString("sampler") } ?: SamplingMethod.EULER_A) }
+    ImageGenBundleDefaultsEffect(selectedGenerationModelPath, selectedMainModel) { d ->
+        width = d.width; height = d.height; steps = d.steps; cfgScale = d.cfg
+        selectedSampler = d.sampler; selectedScheduler = SdScheduler.fromCliName(d.schedulerCliName)
+        flowShiftText = d.flowShift?.toString().orEmpty()
+    }
     var cacheMode by remember { mutableStateOf(SdCacheMode.fromStoredValue(restoredDraft?.optString("cacheMode").orEmpty().ifBlank { null })) }
     var cacheOption by remember { mutableStateOf(restoredDraft?.optString("cacheOption").orEmpty()) }
     var scmMask by remember { mutableStateOf(restoredDraft?.optString("scmMask").orEmpty()) }
@@ -1772,6 +1746,10 @@ fun ImageGenScreen(
             )
             return@generate
         }
+        imageGenImg2ImgBlock(selectedMainModel, selectedLlmVisionPath)?.takeIf { effectiveSdMode == SDMode.IMG2IMG }?.let {
+            errorMessage = resources.getString(it.errorRes)
+            return@generate
+        }
         selectedWorkflowPresetId?.let { presetId ->
             SdWorkflowPresetCatalog.byId(presetId)?.let { preset ->
                 val gate = evaluateSdWorkflowGate(
@@ -2002,6 +1980,7 @@ fun ImageGenScreen(
                 val config = SDConfig(
                     mode = mode,
                     modelPath = modelPath ?: "",
+                    sigmas = selectedMainModel?.let(::sdBundleSigmasFor).orEmpty(),
                     prompt = if (imageGenOperation == ImageGenOperation.ADETAILER_EXISTING) adetailerPrompt else prompt,
                     negativePrompt = negativePrompt,
                     width = width,
@@ -4284,6 +4263,10 @@ fun ImageGenScreen(
                                 )
                             }
                         }
+                    }
+                    item(key = "img2img_block") {
+                        imageGenImg2ImgBlock(selectedMainModel, selectedLlmVisionPath)
+                            ?.takeIf { selectedMode == IMAGE_GEN_MODE_IMG2IMG }?.let { ImageGenImg2ImgHint(it) }
                     }
                     generationModePaneContent()
                 }

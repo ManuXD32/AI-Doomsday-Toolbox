@@ -3,6 +3,9 @@ package com.example.llamadroid.ui.distributed.sd
 import com.example.llamadroid.data.db.ModelEntity
 import com.example.llamadroid.data.db.SdDistributedMasterSettingsEntity
 import com.example.llamadroid.sd.SdCuratedPresets
+import com.example.llamadroid.sd.SdLoraSpec
+import com.example.llamadroid.service.imageLoras
+import com.example.llamadroid.service.withImageLoras
 import com.example.llamadroid.sd.VideoPresetCard
 import com.example.llamadroid.ui.ai.videoScalarDefaultsFor
 import org.junit.Assert.assertEquals
@@ -67,6 +70,43 @@ class SdMasterImagePresetsTest {
         val card = sdMasterImagePresetCards(emptyList(), lookup).single { it.bundleId == "high-end" }
         val once = applyImagePreset(SdDistributedMasterSettingsEntity(), card, emptyList(), lookup)
         assertSame(once, applyImagePreset(once, card, emptyList(), lookup))
+    }
+
+    @Test
+    fun presetAppliesBundleDefaultsAndLcmLoraOnlyWhenInstalled() {
+        val lookup = lookup("sd15-q4", "lcm-lora-sd15")
+        val cards = sdMasterImagePresetCards(emptyList(), lookup)
+        val lcm = cards.single { it.bundleId == "sd15-lcm" }
+        assertTrue(lcm.installed)
+        val next = applyImagePreset(SdDistributedMasterSettingsEntity(), lcm, emptyList(), lookup)
+        assertEquals("4", next.imageSteps)
+        assertEquals("/m/lcm-lora-sd15", next.imageLoraPath)
+        assertTrue(next.imageLoraEnabled)
+
+        val partial = lookup("sd15-q4")
+        val noLora = applyImagePreset(
+            SdDistributedMasterSettingsEntity(),
+            sdMasterImagePresetCards(emptyList(), partial).single { it.bundleId == "sd15-lcm" }.copy(installed = true),
+            emptyList(),
+            partial
+        )
+        assertEquals("4", noLora.imageSteps)
+        assertEquals("", noLora.imageLoraPath)
+    }
+
+    @Test
+    fun switchingFromLcmToLowEndRemovesOnlyTheCuratedLcmLora() {
+        val lookup = lookup("sd15-q4", "lcm-lora-sd15")
+        val lcm = sdMasterImagePresetCards(emptyList(), lookup).single { it.bundleId == "sd15-lcm" }
+        val onLcm = applyImagePreset(SdDistributedMasterSettingsEntity(), lcm, emptyList(), lookup)
+        val withUser = onLcm.withImageLoras(onLcm.imageLoras() + SdLoraSpec(path = "/m/user-lora"))
+        val lowEnd = withUser.withImageMainModel("/m/sd15-q4", "low-end", emptyList(), lookup)
+        assertEquals(listOf("/m/user-lora"), lowEnd.imageLoras().map { it.path })
+        assertTrue(lowEnd.imageLoraEnabled)
+
+        val only = onLcm.withImageMainModel("/m/sd15-q4", "low-end", emptyList(), lookup)
+        assertTrue(only.imageLoras().isEmpty())
+        assertFalse(only.imageLoraEnabled)
     }
 
     @Test
